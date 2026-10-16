@@ -21,7 +21,7 @@ Eulerian Aurora는 플레이어가 3D 퍼즐 맵을 직접 제작하고 공유�
 
 | 항목 | 링크 |
 | --- | --- |
-| 게임 빌드 / 플레이 | [스팀 링크](https://store.steampowered.com/app/4331920/SQUAREERAUQS/) |
+| 게임 빌드 / 플레이 | [게임 빌드 다운로드](https://drive.google.com/drive/folders/1cfVFyUut6KiSZSVNNVUuNMxaAbQomW8c) |
 | 시연 영상 / 트레일러 | [트레일러 보기](https://1seong.github.io/assets/projects/aurora/trailer.mp4)|
 | 팀 문서 허브 | [프로젝트 문서](https://drive.google.com/drive/u/0/folders/1IGMLGUreO3WDR3LEqzpbtfKZpKzZaxUQ) |
 
