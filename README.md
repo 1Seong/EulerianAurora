@@ -24,6 +24,7 @@ Eulerian Aurora는 플레이어가 3D 퍼즐 맵을 직접 제작하고 공유�
 | 게임 빌드 / 플레이 | [게임 빌드 다운로드](https://drive.google.com/drive/folders/1cfVFyUut6KiSZSVNNVUuNMxaAbQomW8c) |
 | 시연 영상 / 트레일러 | [트레일러 보기](https://1seong.github.io/assets/projects/aurora/trailer.mp4)|
 | 팀 문서 허브 | [프로젝트 문서](https://drive.google.com/drive/u/0/folders/1IGMLGUreO3WDR3LEqzpbtfKZpKzZaxUQ) |
+| QA 기록 | [QA Log](https://docs.google.com/spreadsheets/d/1m_KURQGTxd0x7m2Nlj68Ax_Qtp4aNc9YAAjlM2upWb4/edit?gid=0#gid=0) |
 
 **실행 방법:** 게임 빌드를 내려받아 압축을 해제한 뒤 `EulerianAurora.exe`를 실행합니다. 마우스와 키보드로 조작하며 자세한 방법은 게임 내 안내를 참고합니다.
 
