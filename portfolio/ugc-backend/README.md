@@ -4,6 +4,23 @@
 
 ## 코드
 
+```mermaid
+sequenceDiagram
+  participant UI as 맵 목록 UI
+  participant C as DBManager
+  participant R as Supabase API
+  UI->>C: 검색·정렬·페이지·필터
+  C->>R: fetch_maps_page
+  R-->>C: 맵 페이지
+  par 키 목록 기반 상태 조회
+    C->>R: get_user_map_interactions
+  and 작성자 ID 기반 조회
+    C->>R: Nickname 목록
+  end
+  R-->>C: 상태와 닉네임
+  C-->>UI: 복합키로 결합한 결과
+```
+
 **DBManager:** 맵과 사용자 상태를 조회·저장합니다. **UserLevelList:** 검색 조건과 좋아요·신고 입력을 받습니다. **LevelListController:** 작성 중인 맵과 업로드한 맵의 관리를 담당합니다. 아래는 UI 입력을 인자로 바꾼 데이터 처리 부분입니다.
 
 ```csharp

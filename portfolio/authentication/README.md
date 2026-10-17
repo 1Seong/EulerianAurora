@@ -4,6 +4,21 @@
 
 ## 코드
 
+```mermaid
+sequenceDiagram
+  participant U as 사용자
+  participant C as Unity 인증 연동
+  participant A as Supabase Auth
+  participant B as 외부 브라우저
+  U->>C: Google 또는 Discord 로그인
+  C->>A: PKCE 로그인 URL 요청
+  C->>B: 인증 페이지 열기
+  B-->>C: localhost 콜백에 code 전달
+  C->>A: code와 verifier로 세션 교환
+  A-->>C: 로그인 세션
+  C-->>U: 로그인 상태 이벤트
+```
+
 **SupabaseManager · SignInWithEmailPassword:** 앱 시작 시 세션을 복원하고 이메일 인증 요청을 처리합니다. **SessionListener:** 인증 상태를 구독합니다. 아래에서는 상태 알림을 하나의 이벤트로 통합했습니다.
 
 ```csharp
