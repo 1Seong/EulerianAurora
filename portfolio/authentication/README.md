@@ -25,13 +25,27 @@ SDK의 Observer형 리스너 연결입니다. 원본은 로그인 상태·세션
 
 ```mermaid
 flowchart LR
-  A["Supabase Auth · 상태 발행"] -->|상태 콜백| M["SupabaseManager"]
+  A["Supabase Auth · 상태 발행"] -->|상태 콜백| M["SupabaseManager · Singleton"]
   A -->|상태 콜백| L["SessionListener · 상태 로그"]
   M --> S["세션 저장 · 로그인 여부 갱신"]
 ```
 
 ```csharp
 // SupabaseManager와 SignInWithEmailPassword의 핵심 흐름을 통합한 발췌
+public static SupabaseManager Instance;
+
+// 씬 전환 시 인증 클라이언트가 중복 생성되지 않게 한 인스턴스를 유지
+private void Awake()
+{
+    if (Instance != null && Instance != this)
+    {
+        Destroy(gameObject);
+        return;
+    }
+    Instance = this;
+    DontDestroyOnLoad(gameObject);
+}
+
 private Client client;
 private readonly UnitySession persistence = new();
 public event Action<bool> LoginStateChanged;

@@ -4,6 +4,16 @@
 
 ## 코드
 
+**Memento 방식의 Undo:** 변경 전 값의 사본을 스택에 보관합니다. 명령 객체를 실행·취소하는 Command 패턴이 아니라 상태 복원이며, Originator·보관 역할은 PuzzlePlayer 안에 있습니다.
+
+```mermaid
+flowchart LR
+  P["PuzzlePlayer · 이동 전 상태"] -->|깊은 복사| M["Snapshot · 맵과 포탈 및 기믹 상태"]
+  M -->|Push| S["Undo 스택"]
+  S -->|Pop| R["상태 복원"]
+  R --> V["타일과 플레이어 다시 표시"]
+```
+
 **PuzzlePlayer:** 이동과 기믹을 처리하고 클리어를 판정합니다. **TileHelper:** 타일의 색칠·반전 상태를 변환합니다. **PuzzleTile:** 상태를 화면에 표시합니다.
 
 ```csharp

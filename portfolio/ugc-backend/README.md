@@ -147,10 +147,57 @@ public async Task ReportAsync(long mapId, Guid creatorId, string reason)
 }
 ```
 
+**서버·DB 발췌**
+
+2026-10-17 Supabase에서 확인한 구조 중 복합키·소유자 검사·배치 조회만 설명용으로 재구성했습니다. 아래 개념명·테이블명·정책명·파라미터는 예시로 바꿨으며, 실제 서버 정의나 적용용 마이그레이션이 아닙니다.
+
+```mermaid
+erDiagram
+  LEVEL {
+    bigint level_id PK
+    uuid creator_id PK
+  }
+  USER_REACTION {
+    uuid viewer_id PK
+    bigint level_id PK
+    uuid creator_id PK
+  }
+  LEVEL ||--o{ USER_REACTION : "맵과 작성자 키로 연결"
+```
+
+**접근 범위:** 개인 초안과 공개 맵의 접근 범위를 나눕니다. 대표 예시로 수정 전·후 모두 소유자를 검사하는 형태만 남겼습니다. 전체 역할·정책 조합은 공개하지 않습니다.
+
+```sql
+-- sample_levels와 정책 이름은 설명용 가칭이다.
+CREATE POLICY "owner_update_example" ON sample_levels
+  FOR UPDATE TO authenticated
+  USING ((SELECT auth.uid()) = creator_id)
+  WITH CHECK ((SELECT auth.uid()) = creator_id);
+```
+
+**배치 조회:** 페이지의 복합키 목록을 한 번에 전달해 사용자 상태와 결합합니다. 아래는 좋아요 판정에 해당하는 JOIN 하나만 남긴 예시이며, 클리어·신고·닉네임 처리와 실제 RPC 본문은 생략했습니다. `:level_keys`·`:viewer_id`는 호출부의 입력을 나타내는 설명용 자리표시자입니다.
+
+```sql
+WITH keys AS (
+  SELECT (elem->>'level_id')::bigint AS level_id,
+         (elem->>'creator_id')::uuid AS creator_id
+  FROM jsonb_array_elements(CAST(:level_keys AS jsonb)) AS elem
+)
+SELECT k.level_id, k.creator_id,
+       reaction.viewer_id IS NOT NULL AS is_liked
+FROM keys k
+LEFT JOIN sample_reactions reaction
+  ON reaction.level_id = k.level_id
+  AND reaction.creator_id = k.creator_id
+  AND reaction.viewer_id = CAST(:viewer_id AS uuid);
+```
+
+**서버 처리:** 정렬 기준은 허용 목록으로 제한하고, 좋아요 변경은 JWT 사용자 확인 뒤 처리합니다. 집계·기록 갱신 트리거는 원리만 언급하고 본문은 공개하지 않습니다. 이 샘플은 동시성·권한별 실동작을 검증한 부하·보안 테스트 자료가 아닙니다.
+
 ## 생략 및 재구성한 내용
 
 - 원본: `Assets/Scripts/DBManager.cs`, `LevelListController.cs`, `Assets/Scripts/UI/UserLevelList.cs`. 기준 커밋: `66882730c36e4c3f4e7d59f019a835ea749f39b8`.
 - 상태 조회는 **키 목록 기반 배치**, 상태·닉네임 조회 사이에는 **병렬 처리**를 사용합니다. 전체 목록 조회가 한 요청으로 끝나는 것은 아닙니다.
 - `Map`, `MapCreating`, `Report`, `Nickname`, 결과 모델·enum, SDK와 JSON 라이브러리는 원본 의존성입니다. 테이블 속성·복합키 정의, UI 셀·썸네일 로딩, 예외 팝업과 버튼 제어는 생략한 설명용 발췌입니다.
 - 데이터 포맷 변환과 Storage 캡처·업로드는 에디터 원본에 있으며 여기서는 제외했습니다.
-- RPC 구현·RLS 정책·DB 제약은 서버에 별도로 존재합니다.
+- DB 도식은 맵과 사용자 반응의 개념 관계만 남겼습니다. 전체 스키마·실제 정책명·권한 조합·트리거·RPC 원문·프로젝트 주소·키·사용자 데이터는 포함하지 않았습니다. SQL의 가칭과 자리표시자는 별도 매핑 없이는 실행할 수 없습니다.
