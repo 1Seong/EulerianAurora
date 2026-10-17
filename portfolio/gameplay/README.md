@@ -7,6 +7,7 @@
 **Memento 방식의 Undo:** 변경 전 값의 사본을 스택에 보관합니다. 명령 객체를 실행·취소하는 Command 패턴이 아니라 상태 복원이며, Originator·보관 역할은 PuzzlePlayer 안에 있습니다.
 
 ```mermaid
+%%{init: {"htmlLabels": false, "themeVariables": {"fontFamily": "Arial, sans-serif"}, "flowchart": {"padding": 20, "diagramPadding": 20}, "sequence": {"diagramMarginX": 24, "diagramMarginY": 16, "wrap": true}}}%%
 flowchart LR
   P["PuzzlePlayer · 이동 전 상태"] -->|깊은 복사| M["Snapshot · 맵과 포탈 및 기믹 상태"]
   M -->|Push| S["Undo 스택"]

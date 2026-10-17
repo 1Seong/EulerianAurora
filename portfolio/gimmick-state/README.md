@@ -7,6 +7,7 @@
 **PuzzlePlayer:** 획득한 기믹 상태를 다음 이동에 적용합니다. 이동 취소는 gameplay 샘플의 상태 스냅샷을 사용하며, 회전은 layer-rotation 샘플에 분리돼 있습니다.
 
 ```mermaid
+%%{init: {"htmlLabels": false, "themeVariables": {"fontFamily": "Arial, sans-serif"}, "flowchart": {"padding": 20, "diagramPadding": 20}, "sequence": {"diagramMarginX": 24, "diagramMarginY": 16, "wrap": true}}}%%
 flowchart LR
   A["유효한 이동 입력"] --> B{"보유 기믹"}
   B -->|Ghost| C["횟수 차감 · 이동"]

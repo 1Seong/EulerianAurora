@@ -5,6 +5,7 @@
 ## 코드
 
 ```mermaid
+%%{init: {"htmlLabels": false, "themeVariables": {"fontFamily": "Arial, sans-serif"}, "flowchart": {"padding": 20, "diagramPadding": 20}, "sequence": {"diagramMarginX": 24, "diagramMarginY": 16, "wrap": true}}}%%
 sequenceDiagram
   participant U as 사용자
   participant C as Unity 인증 연동
@@ -24,6 +25,7 @@ sequenceDiagram
 SDK의 Observer형 리스너 연결입니다. 원본은 로그인 상태·세션 저장을 갱신하며, 아래 코드의 `LoginStateChanged`는 설명용으로 통합한 이벤트입니다.
 
 ```mermaid
+%%{init: {"htmlLabels": false, "themeVariables": {"fontFamily": "Arial, sans-serif"}, "flowchart": {"padding": 20, "diagramPadding": 20}, "sequence": {"diagramMarginX": 24, "diagramMarginY": 16, "wrap": true}}}%%
 flowchart LR
   A["Supabase Auth · 상태 발행"] -->|상태 콜백| M["SupabaseManager · Singleton"]
   A -->|상태 콜백| L["SessionListener · 상태 로그"]

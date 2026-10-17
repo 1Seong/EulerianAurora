@@ -5,6 +5,7 @@
 ## 코드
 
 ```mermaid
+%%{init: {"htmlLabels": false, "themeVariables": {"fontFamily": "Arial, sans-serif"}, "flowchart": {"padding": 20, "diagramPadding": 20}, "sequence": {"diagramMarginX": 24, "diagramMarginY": 16, "wrap": true}}}%%
 sequenceDiagram
   participant UI as 맵 목록 UI
   participant C as DBManager
@@ -152,6 +153,7 @@ public async Task ReportAsync(long mapId, Guid creatorId, string reason)
 2026-10-17 Supabase에서 확인한 구조 중 복합키·소유자 검사·배치 조회만 설명용으로 재구성했습니다. 아래 개념명·테이블명·정책명·파라미터는 예시로 바꿨으며, 실제 서버 정의나 적용용 마이그레이션이 아닙니다.
 
 ```mermaid
+%%{init: {"htmlLabels": false, "themeVariables": {"fontFamily": "Arial, sans-serif"}, "flowchart": {"padding": 20, "diagramPadding": 20}, "sequence": {"diagramMarginX": 24, "diagramMarginY": 16, "wrap": true}}}%%
 erDiagram
   LEVEL {
     bigint level_id PK

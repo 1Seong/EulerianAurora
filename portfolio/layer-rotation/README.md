@@ -5,6 +5,7 @@
 ## 코드
 
 ```mermaid
+%%{init: {"htmlLabels": false, "themeVariables": {"fontFamily": "Arial, sans-serif"}, "flowchart": {"padding": 20, "diagramPadding": 20}, "sequence": {"diagramMarginX": 24, "diagramMarginY": 16, "wrap": true}}}%%
 flowchart LR
   A["레이어 선택"] --> B["이전 배열 복사"]
   B --> C["격자 좌표 90도 변환"]

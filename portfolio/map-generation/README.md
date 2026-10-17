@@ -5,9 +5,10 @@
 ## 코드
 
 ```mermaid
+%%{init: {"htmlLabels": false, "themeVariables": {"fontFamily": "Arial, sans-serif"}, "flowchart": {"padding": 20, "diagramPadding": 20}, "sequence": {"diagramMarginX": 24, "diagramMarginY": 16, "wrap": true}}}%%
 flowchart LR
   A["타일 배치 입력"] --> B["표면·방향 검사"]
-  B --> C["Memento 방식 · 변경 전 맵과 시작점 저장"]
+  B --> C["변경 전 맵과 시작점 저장"]
   C --> D["편집 데이터 갱신"]
   D --> E["Undo · 직전 데이터 복원"]
   D --> F["복사본으로 수동 플레이 테스트"]
@@ -16,7 +17,7 @@ flowchart LR
 
 **MapEditor:** 편집 데이터를 관리하고 테스트·저장으로 전달합니다. **EditTile:** 셀 클릭과 대시 배치 가능 여부를 검사합니다. **GameManager:** 편집 맵을 플레이 모드로 넘깁니다.
 
-Undo는 맵·시작점 스냅샷을 복원하는 Memento 방식입니다. 테스트에는 별도 복사본을 넘겨 플레이 중 변경이 편집 원본에 역류하지 않도록 합니다.
+Undo는 맵·시작점 사본을 복원합니다. 테스트에는 별도 복사본을 넘겨 플레이 중 변경이 편집 원본에 역류하지 않도록 합니다.
 
 ```csharp
 // MapEditor의 편집 상태와 EditTile의 배치 검사를 재구성한 발췌
