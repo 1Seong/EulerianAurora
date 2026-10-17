@@ -21,6 +21,15 @@ sequenceDiagram
 
 **SupabaseManager · SignInWithEmailPassword:** 앱 시작 시 세션을 복원하고 이메일 인증 요청을 처리합니다. **SessionListener:** 인증 상태를 구독합니다. 아래에서는 상태 알림을 하나의 이벤트로 통합했습니다.
 
+SDK의 Observer형 리스너 연결입니다. 원본은 로그인 상태·세션 저장을 갱신하며, 아래 코드의 `LoginStateChanged`는 설명용으로 통합한 이벤트입니다.
+
+```mermaid
+flowchart LR
+  A["Supabase Auth · 상태 발행"] -->|상태 콜백| M["SupabaseManager"]
+  A -->|상태 콜백| L["SessionListener · 상태 로그"]
+  M --> S["세션 저장 · 로그인 여부 갱신"]
+```
+
 ```csharp
 // SupabaseManager와 SignInWithEmailPassword의 핵심 흐름을 통합한 발췌
 private Client client;
