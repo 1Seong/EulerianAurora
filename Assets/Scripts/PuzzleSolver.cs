@@ -101,7 +101,8 @@ public static class PuzzleSolver
 
     private sealed class Search
     {
-        private const int FirstAttemptLimit = 12_000;
+        private const int RetryAfter = 12_000;
+        private const int RetryStateLimit = 512;
 
         private readonly int _size;
         private readonly int _last;
@@ -262,16 +263,12 @@ public static class PuzzleSolver
                     _possibleNeighbors = graph;
             }
 
-            // Both attempts share one state budget. The retry changes only ties.
-            int firstBudget = Math.Min(FirstAttemptLimit, limit);
+            // Keep the original frontier and budget while probing a different tie order.
+            int retryBudget = limit > RetryAfter ? Math.Min(RetryStateLimit, int.MaxValue - limit) : 0;
             int explored = 0;
-            var result = Explore(initial, firstBudget, canUseRotationGraph, null, token, ref explored);
-            if (result != null)
-                return result;
-            if (explored < limit)
-                result = Explore(initial, limit - explored, canUseRotationGraph, new System.Random(1), token, ref explored);
+            var result = Explore(initial, limit, canUseRotationGraph, null, retryBudget, token, ref explored);
             return result ?? new SolveResult(SolveStatus.Inconclusive,
-                $"자동 탐색 한도({limit:N0}개 상태)에 도달했습니다. 해답 존재 여부는 미확정입니다.", explored);
+                $"자동 탐색에서 {explored:N0}개 상태를 확인했으나 해답을 찾지 못했습니다. 해답 존재 여부는 미확정입니다.", explored);
         }
 
         private bool HasValidStartColor(State state)
@@ -312,9 +309,9 @@ public static class PuzzleSolver
         }
 
         private SolveResult Explore(State initial, int budget, bool depthFirst, System.Random tieOrder,
-            CancellationToken token, ref int explored)
+            int retryBudget, CancellationToken token, ref int explored)
         {
-            int stopAt = explored + budget;
+            int visited = 0;
             var pending = new SortedDictionary<int, Stack<Node>>();
             var seen = new HashSet<(string tiles, string portals, int position, int ghost, bool laser, int unpainted)>();
             // Replay uses only the parent index and input, so expanded boards can be collected.
@@ -335,10 +332,19 @@ public static class PuzzleSolver
                     pending.Remove(bucket.Key);
 
                 explored++;
+                visited++;
                 if (node.State.Unpainted == 0)
                     return BuildSolution(trace, node.TraceIndex, initial, explored);
-                if (explored >= stopAt)
+                if (visited >= budget)
                     return null;
+                if (retryBudget > 0 && visited == RetryAfter)
+                {
+                    bool originalInvalidTransition = _invalidTransition;
+                    var retry = Explore(initial, retryBudget, depthFirst, new System.Random(1), 0, token, ref explored);
+                    if (retry != null && retry.Status != SolveStatus.Inconclusive)
+                        return retry;
+                    _invalidTransition = originalInvalidTransition;
+                }
                 if (CannotFinish(node.State))
                     continue;
 
