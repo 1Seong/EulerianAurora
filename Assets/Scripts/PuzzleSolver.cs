@@ -5,6 +5,8 @@ using UnityEngine;
 
 public static class PuzzleSolver
 {
+    private const int DefaultStateLimit = 70_000;
+
     private static readonly Vector3Int[] Directions =
     {
         Vector3Int.right, Vector3Int.left, Vector3Int.up, Vector3Int.down,
@@ -40,7 +42,7 @@ public static class PuzzleSolver
     }
 
     public static SolveResult Solve(char[,,] map, Dictionary<Vector3Int, Vector3Int> portalPairs,
-        int rotationAxis = 0, bool[] canRotate = null, int stateLimit = 60_000,
+        int rotationAxis = 0, bool[] canRotate = null, int stateLimit = DefaultStateLimit,
         CancellationToken cancellationToken = default)
     {
         if (map == null || map.Length == 0 || map.GetLength(0) != map.GetLength(1) ||
@@ -102,7 +104,8 @@ public static class PuzzleSolver
     private sealed class Search
     {
         private const int RetryAfter = 12_000;
-        private const int RetryStateLimit = 512;
+        private const int RetryStateLimit = 12_000;
+        private const int InverterRetryStateLimit = 12_000;
 
         private readonly int _size;
         private readonly int _last;
@@ -240,35 +243,52 @@ public static class PuzzleSolver
                     tile is (char)TileType.Empty or (char)TileType.Painted or (char)TileType.Road) &&
                 !HasValidStartColor(initial))
                 return new SolveResult(SolveStatus.Unsolvable,
-                    "격자 색상 수가 현재 시작점과 맞지 않아 모든 칸을 한 번씩 방문할 수 없습니다.");
+                    "정답이 존재하지 않습니다.");
 
             bool canUseRotationGraph = _axis >= 0 && Array.TrueForAll(initial.Tiles, tile =>
                 tile == (char)TileType.Empty || tile == (char)TileType.Painted ||
                 tile == (char)TileType.Road || tile == (char)TileType.Laser || IsDash(tile));
 
-            bool checkRotationConnectivity = _axis >= 0 && initial.Portals == null &&
+            bool checkRotationConnectivity = _axis >= 0 &&
                 Array.IndexOf(initial.Tiles, (char)TileType.Inv) < 0;
-            if (initial.Unpainted > 0 && (checkRotationConnectivity || canUseRotationGraph))
+            if (initial.Unpainted > 0 && (canUseRotationGraph ||
+                checkRotationConnectivity && initial.Portals == null))
             {
                 var graph = BuildRotationGraph(token);
-                if (checkRotationConnectivity)
+                if (checkRotationConnectivity && initial.Portals == null)
                 {
                     // Ghosts can revisit occupied cells, but they cannot connect separate components.
                     int unreachable = FindUnreachableTile(initial, graph);
                     if (unreachable >= 0)
                         return new SolveResult(SolveStatus.Unsolvable,
-                            $"가능한 회전을 모두 고려해도 {_positions[unreachable]} 칸에 도달할 수 없습니다.");
+                            $"정답이 존재하지 않습니다.");
                 }
                 if (canUseRotationGraph)
                     _possibleNeighbors = graph;
+            }
+            if (initial.Unpainted > 0 && checkRotationConnectivity && initial.Portals != null)
+            {
+                int unreachable = FindUnreachableTileWithPortals(initial, token);
+                if (unreachable >= 0)
+                    return new SolveResult(SolveStatus.Unsolvable,
+                        $"정답이 존재하지 않습니다.");
             }
 
             // Keep the original frontier and budget while probing a different tie order.
             int retryBudget = limit > RetryAfter ? Math.Min(RetryStateLimit, int.MaxValue - limit) : 0;
             int explored = 0;
             var result = Explore(initial, limit, canUseRotationGraph, null, retryBudget, token, ref explored);
+            if (result == null && limit >= DefaultStateLimit &&
+                Array.IndexOf(initial.Tiles, (char)TileType.Inv) >= 0)
+            {
+                // Only try this order after the original search uses its full budget.
+                int inverterBudget = Math.Min(InverterRetryStateLimit, int.MaxValue - explored);
+                if (inverterBudget > 0)
+                    result = Explore(initial, inverterBudget, false, null, 0, token, ref explored,
+                        preferInverter: true);
+            }
             return result ?? new SolveResult(SolveStatus.Inconclusive,
-                $"자동 탐색에서 {explored:N0}개 상태를 확인했으나 해답을 찾지 못했습니다. 해답 존재 여부는 미확정입니다.", explored);
+                $"탐색 한도 도달!", explored);
         }
 
         private bool HasValidStartColor(State state)
@@ -302,6 +322,74 @@ public static class PuzzleSolver
                     _queue[count++] = neighbor;
                 }
             }
+            return FirstUnreachedTile(state);
+        }
+
+        private int FindUnreachableTileWithPortals(State state, CancellationToken token)
+        {
+            var nextRotation = new int[state.Tiles.Length];
+            var possibleTiles = new bool[state.Tiles.Length];
+            var possiblePortals = new bool[state.Tiles.Length];
+            var portalDestinations = new List<int>();
+
+            foreach (int cell in _surfaceCells)
+            {
+                var position = _positions[cell];
+                nextRotation[cell] = _rotationGroups[position[_axis]] == null
+                    ? cell
+                    : Index(RotatePosition(position, true, _last));
+            }
+            foreach (int cell in _surfaceCells)
+            {
+                char tile = state.Tiles[cell];
+                if (tile == (char)TileType.Empty)
+                    continue;
+                int pose = cell;
+                do
+                {
+                    possibleTiles[pose] = true;
+                    if (IsPortal(tile) && !possiblePortals[pose])
+                    {
+                        possiblePortals[pose] = true;
+                        portalDestinations.Add(pose);
+                    }
+                    pose = nextRotation[pose];
+                } while (pose != cell);
+            }
+
+            // Allow all poses and even jumps between unrelated portal endpoints.
+            // Any missing connection in this graph is also missing in the real game.
+            int count = 0;
+            ++_visit;
+            Visit(state.Position);
+            bool visitedPortals = false;
+            for (int i = 0; i < count; i++)
+            {
+                token.ThrowIfCancellationRequested();
+                int cell = _queue[i];
+                for (int direction = 0; direction < Directions.Length; direction++)
+                    Visit(_neighbors[cell, direction]);
+                Visit(nextRotation[cell]);
+                if (!visitedPortals && possiblePortals[cell])
+                {
+                    visitedPortals = true;
+                    foreach (int destination in portalDestinations)
+                        Visit(destination);
+                }
+            }
+            return FirstUnreachedTile(state);
+
+            void Visit(int cell)
+            {
+                if (cell < 0 || !possibleTiles[cell] || _reached[cell] == _visit)
+                    return;
+                _reached[cell] = _visit;
+                _queue[count++] = cell;
+            }
+        }
+
+        private int FirstUnreachedTile(State state)
+        {
             foreach (int cell in _surfaceCells)
                 if (_reached[cell] != _visit && state.Tiles[cell] != (char)TileType.Empty)
                     return cell;
@@ -309,7 +397,7 @@ public static class PuzzleSolver
         }
 
         private SolveResult Explore(State initial, int budget, bool depthFirst, System.Random tieOrder,
-            int retryBudget, CancellationToken token, ref int explored)
+            int retryBudget, CancellationToken token, ref int explored, bool preferInverter = false)
         {
             int visited = 0;
             var pending = new SortedDictionary<int, Stack<Node>>();
@@ -383,10 +471,35 @@ public static class PuzzleSolver
             void Enqueue(Node node)
             {
                 int priority = depthFirst ? 0 : node.State.Unpainted;
+                if (preferInverter)
+                    priority = InverterPriority(node, trace);
                 if (!pending.TryGetValue(priority, out var bucket))
                     pending.Add(priority, bucket = new Stack<Node>());
                 bucket.Push(node);
             }
+        }
+
+        private int InverterPriority(Node node, List<(int parent, int direction)> trace)
+        {
+            var position = _positions[node.State.Position];
+            int distance = int.MaxValue;
+            foreach (int cell in _surfaceCells)
+            {
+                if (node.State.Tiles[cell] != (char)TileType.Inv)
+                    continue;
+                var target = _positions[cell];
+                distance = Math.Min(distance, Math.Abs(position.x - target.x) +
+                    Math.Abs(position.y - target.y) + Math.Abs(position.z - target.z));
+            }
+            if (distance == int.MaxValue)
+                return node.State.Unpainted;
+
+            int inputs = 0;
+            for (int i = node.TraceIndex; i >= 0; i = trace[i].parent)
+                inputs++;
+
+            // States after the inversion take priority over states still approaching it.
+            return _surfaceCells.Length + inputs + distance;
         }
 
         private static void ShuffleTies(List<Node> children, bool depthFirst, System.Random order)
