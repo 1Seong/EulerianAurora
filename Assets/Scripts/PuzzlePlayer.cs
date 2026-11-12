@@ -292,7 +292,8 @@ public class PuzzlePlayer : MonoBehaviour
 
     private struct MapState
     {
-        public char[,,] Map;
+        public int FirstTileChange;
+        public int AnswerCount;
         public Vector3 PlayerPos;
         public int RoadLeftCount;
         public int CurrentGhostCount;
@@ -301,6 +302,8 @@ public class PuzzlePlayer : MonoBehaviour
     }
 
     private Stack<MapState> _undoStack;
+    private readonly List<(int cell, char previous)> _undoTileChanges = new();
+    private bool _recordUndo;
 
     private void Awake()
     {
@@ -395,6 +398,8 @@ public class PuzzlePlayer : MonoBehaviour
         // 남은 블럭 개수 파악
         _isCleared = false;
         _roadLeftCount = 0;
+        _recordUndo = false;
+        _undoTileChanges.Clear();
         _map = (char[,,])_initialMap.Clone();
         _portalPairDic = new Dictionary<Vector3Int, Vector3Int>(_initialPortalPairDic);
 
@@ -438,6 +443,7 @@ public class PuzzlePlayer : MonoBehaviour
             _undoStack.Clear();
         else
             _undoStack = new();
+        undoButton.interactable = false;
         pivot.position = _initialCameraPosition;
         pivot.rotation = _initialCameraRotation;
         currentUp = Vector3.up;
@@ -561,69 +567,77 @@ public class PuzzlePlayer : MonoBehaviour
         }
         // ---- 전진 ----
         var before = _map[nLayer, nRow, nCol];
-        if (doSave)
+        try
         {
-            SaveUndoState();
-            Moves = (short)(_moves+1);
-        }
-
-        if (_currentGhostCount == 0 && _rotAxis != 0 
-                &&(_map[nLayer, nRow, nCol] == (char)TileType.Empty || TileHelper.IsPainted(_map[nLayer, nRow, nCol]))) // 회전
-        {
-            if (_rotAxis == 1 && (cz == 0 && dir.y > 0 || cz == CubeSize - 1 && dir.y < 0 
-                    || cy == 0 && dir.z < 0 || cy == CubeSize - 1 && dir.z > 0)
-                || _rotAxis == 2 && (cx == 0 && dir.z > 0 || cx == CubeSize - 1 && dir.z < 0 
-                    || cz == 0 && dir.x < 0 || cz == CubeSize - 1 && dir.x > 0)
-                || _rotAxis == 3 && (cx == 0 && dir.y < 0 || cx == CubeSize - 1 && dir.y > 0 
-                    || cy == 0 && dir.x > 0 || cy == CubeSize - 1 && dir.x < 0))
+            if (doSave)
             {
-                await ApplyRotate(nLayer, nRow, nCol, true); // 시계방향
+                SaveUndoState();
+                Moves = (short)(_moves+1);
+            }
+
+            if (_currentGhostCount == 0 && _rotAxis != 0
+                    &&(_map[nLayer, nRow, nCol] == (char)TileType.Empty || TileHelper.IsPainted(_map[nLayer, nRow, nCol]))) // 회전
+            {
+                if (_rotAxis == 1 && (cz == 0 && dir.y > 0 || cz == CubeSize - 1 && dir.y < 0
+                        || cy == 0 && dir.z < 0 || cy == CubeSize - 1 && dir.z > 0)
+                    || _rotAxis == 2 && (cx == 0 && dir.z > 0 || cx == CubeSize - 1 && dir.z < 0
+                        || cz == 0 && dir.x < 0 || cz == CubeSize - 1 && dir.x > 0)
+                    || _rotAxis == 3 && (cx == 0 && dir.y < 0 || cx == CubeSize - 1 && dir.y > 0
+                        || cy == 0 && dir.x > 0 || cy == CubeSize - 1 && dir.x < 0))
+                {
+                    await ApplyRotate(nLayer, nRow, nCol, true); // 시계방향
+                }
+                else
+                {
+                    await ApplyRotate(nLayer, nRow, nCol, false); // 반시계
+                }
+                return;
+            }
+            _answer.Push(new Vector3Int(nLayer, nRow, nCol));
+
+            if (_currentGhostCount > 0)
+                --CurrentGhostCount;
+
+            if (_hasLaser)
+            {
+                AudioManager.Instance.PlaySFX(AudioManager.SFXType.LaserShoot);
+                HasLaser = false;
+                var animTasks =  new List<UniTask>();
+                do
+                {
+                    --_roadLeftCount;
+                    var afterInv = TileHelper.InvTable[_map[(int)nPos.x, (int)nPos.y, (int)nPos.z]];
+                    SetMapTile((int)nPos.x, (int)nPos.y, (int)nPos.z, afterInv);
+                    animTasks.Add(_tiles[(int)nPos.x, (int)nPos.y, (int)nPos.z].Pop());
+                    _tiles[(int)nPos.x, (int)nPos.y, (int)nPos.z].SimpleRender(afterInv); // TODO: 나중에 Render로 변경
+                    await UniTask.WaitForSeconds(0.1f);
+                    nPos += dir;
+                } while (!CannotMove((int)nPos.x, (int)nPos.y, (int)nPos.z));
+                await UniTask.WhenAll(animTasks);
             }
             else
             {
-                await ApplyRotate(nLayer, nRow, nCol, false); // 반시계
+                // 플레이어 움직임 애니메이션 기다리고
+                AudioManager.Instance.PlaySFX(AudioManager.SFXType.Move);
+                await playerModel.DOMove(nPos, playerMoveDuration).SetEase(playerMoveEase).AsyncWaitForCompletion()
+                    .AsUniTask();
+                // 색칠 및 아이템 사용
+                if (_currentGhostCount == 0)
+                {
+                    if (!TileHelper.IsPainted(before))
+                        --_roadLeftCount;
+                    await PaintWithRender(nLayer, nRow, nCol, true); // 일단 simpleRender 사용
+                    await ApplyItem(nLayer, nRow, nCol, before); // 아이템 사용
+                }
             }
-            return;
-        }
-        _answer.Push(new Vector3Int(nLayer, nRow, nCol));
-        
-        if (_currentGhostCount > 0)
-            --CurrentGhostCount;
 
-        if (_hasLaser)
-        {
-            AudioManager.Instance.PlaySFX(AudioManager.SFXType.LaserShoot);
-            HasLaser = false;
-            var animTasks =  new List<UniTask>();
-            do
-            {
-                --_roadLeftCount;
-                var afterInv = TileHelper.InvTable[_map[(int)nPos.x, (int)nPos.y, (int)nPos.z]];
-                _map[(int)nPos.x, (int)nPos.y, (int)nPos.z] = afterInv;
-                animTasks.Add(_tiles[(int)nPos.x, (int)nPos.y, (int)nPos.z].Pop());
-                _tiles[(int)nPos.x, (int)nPos.y, (int)nPos.z].SimpleRender(afterInv); // TODO: 나중에 Render로 변경
-                await UniTask.WaitForSeconds(0.1f);
-                nPos += dir;
-            } while (!CannotMove((int)nPos.x, (int)nPos.y, (int)nPos.z));
-            await UniTask.WhenAll(animTasks);
+            CheckGameCleared();
         }
-        else
+        finally
         {
-            // 플레이어 움직임 애니메이션 기다리고
-            AudioManager.Instance.PlaySFX(AudioManager.SFXType.Move);
-            await playerModel.DOMove(nPos, playerMoveDuration).SetEase(playerMoveEase).AsyncWaitForCompletion()
-                .AsUniTask();
-            // 색칠 및 아이템 사용
-            if (_currentGhostCount == 0)
-            {
-                if (!TileHelper.IsPainted(before))
-                    --_roadLeftCount;
-                await PaintWithRender(nLayer, nRow, nCol, true); // 일단 simpleRender 사용
-                await ApplyItem(nLayer, nRow, nCol, before); // 아이템 사용
-            }
+            if (doSave)
+                _recordUndo = false;
         }
-
-        CheckGameCleared();
     }
 
     private async UniTask ApplyItem(int x, int y, int z, char before)
@@ -719,7 +733,7 @@ public class PuzzlePlayer : MonoBehaviour
             if (i == x && j == y && k == z) continue;
 
             var after = TileHelper.InvTable[_map[i, j, k]];
-            _map[i, j, k] = after;
+            SetMapTile(i, j, k, after);
             if (!TileHelper.IsPainted(after))
                 ++_roadLeftCount;
         }
@@ -776,10 +790,7 @@ public class PuzzlePlayer : MonoBehaviour
                         case (char)TileType.PortalOutPainted:
                             var original = new Vector3Int(x, i, j);
                             var target = clockWise ? new Vector3Int(x, CubeSize-1-j, i) : new Vector3Int(x, j, CubeSize-1-i);
-                            var val = _portalPairDic[original];
-                            _portalPairDic.Remove(original);
-                            _portalPairDic[target] = val;
-                            _portalPairDic[val] = target;
+                            MovePortalLink(original, target);
                             break;
                         case (char)TileType.DashYp:
                             temp[i][j] = clockWise ? (char)TileType.DashZp : (char)TileType.DashZm;
@@ -808,12 +819,12 @@ public class PuzzlePlayer : MonoBehaviour
                     }
                     if (clockWise)
                     {
-                        _map[x, CubeSize - 1 - j, i] = temp[i][j];
+                        SetMapTile(x, CubeSize - 1 - j, i, temp[i][j]);
                         playerTarget = new Vector3(playerX, CubeSize - 1 - playerZ, playerY);
                     }
                     else
                     {
-                        _map[x, j, CubeSize - 1 - i] = temp[i][j];
+                        SetMapTile(x, j, CubeSize - 1 - i, temp[i][j]);
                         playerTarget = new Vector3(playerX, playerZ, CubeSize-1-playerY);
                     }
                     rotationObjects.Add(_tiles[x, i, j].gameObject);
@@ -863,10 +874,7 @@ public class PuzzlePlayer : MonoBehaviour
                         case (char)TileType.PortalOutPainted:
                             var original = new Vector3Int(i, y, j);
                             var target = clockWise ? new Vector3Int(j, y, CubeSize-1-i) : new Vector3Int(CubeSize-1-j, y, i);
-                            var val = _portalPairDic[original];
-                            _portalPairDic.Remove(original);
-                            _portalPairDic[target] = val;
-                            _portalPairDic[val] = target;
+                            MovePortalLink(original, target);
                             break;
                         case (char)TileType.DashXp:
                             temp[i][j] = clockWise ? (char)TileType.DashZm : (char)TileType.DashZp;
@@ -895,12 +903,12 @@ public class PuzzlePlayer : MonoBehaviour
                     }
                     if (clockWise)
                     {
-                        _map[j, y, CubeSize - 1 - i] = temp[i][j];
+                        SetMapTile(j, y, CubeSize - 1 - i, temp[i][j]);
                         playerTarget = new Vector3(playerZ, playerY, CubeSize-1-playerX);
                     }
                     else
                     {
-                        _map[CubeSize - 1 - j, y, i] = temp[i][j];
+                        SetMapTile(CubeSize - 1 - j, y, i, temp[i][j]);
                         playerTarget = new Vector3(CubeSize-1-playerZ, playerY, playerX);
                     }
                     rotationObjects.Add(_tiles[i, y, j].gameObject);
@@ -950,10 +958,7 @@ public class PuzzlePlayer : MonoBehaviour
                         case (char)TileType.PortalOutPainted:
                             var original = new Vector3Int(i, j, z);
                             var target = clockWise ? new Vector3Int(CubeSize-1-j, i, z) : new Vector3Int(j, CubeSize-1-i, z);
-                            var val = _portalPairDic[original];
-                            _portalPairDic.Remove(original);
-                            _portalPairDic[target] = val;
-                            _portalPairDic[val] = target;
+                            MovePortalLink(original, target);
                             break;
                         case (char)TileType.DashYp:
                             temp[i][j] = clockWise ? (char)TileType.DashXm : (char)TileType.DashXp;
@@ -982,12 +987,12 @@ public class PuzzlePlayer : MonoBehaviour
                     }
                     if (clockWise)
                     {
-                        _map[CubeSize - 1 - j, i, z] = temp[i][j];
+                        SetMapTile(CubeSize - 1 - j, i, z, temp[i][j]);
                         playerTarget = new Vector3(CubeSize-1-playerY, playerX, playerZ);
                     }
                     else
                     {
-                        _map[j, CubeSize - 1 - i, z] = temp[i][j];
+                        SetMapTile(j, CubeSize - 1 - i, z, temp[i][j]);
                         playerTarget = new Vector3(playerY, CubeSize - 1 - playerX, playerZ);
                     }
                     rotationObjects.Add(_tiles[i, j, z].gameObject);
@@ -1088,14 +1093,54 @@ public class PuzzlePlayer : MonoBehaviour
     // 움직임이 확정된 뒤 저장
     private void SaveUndoState()
     {
-        // 얕은 복사가 아닌 깊은 복사 필수
-        var snapshot = (char[,,])_map.Clone();
         _undoStack.Push(new MapState()
         {
-            Map = snapshot, PlayerPos = playerModel.position, RoadLeftCount = _roadLeftCount, CurrentGhostCount = _currentGhostCount,
-            HasLaser = _hasLaser, PortalDic = new Dictionary<Vector3Int, Vector3Int>(_portalPairDic)
+            FirstTileChange = _undoTileChanges.Count,
+            AnswerCount = _answer.Count,
+            PlayerPos = playerModel.position,
+            RoadLeftCount = _roadLeftCount,
+            CurrentGhostCount = _currentGhostCount,
+            HasLaser = _hasLaser,
+            PortalDic = _portalPairDic
         });
+        _recordUndo = true;
         undoButton.interactable = true;
+    }
+
+    private void SetMapTile(int x, int y, int z, char tile)
+    {
+        char previous = _map[x, y, z];
+        if (previous == tile)
+            return;
+        if (_recordUndo)
+            _undoTileChanges.Add(((x * CubeSize + y) * CubeSize + z, previous));
+        _map[x, y, z] = tile;
+    }
+
+    private void MovePortalLink(Vector3Int original, Vector3Int target)
+    {
+        if (original == target)
+            return;
+
+        // All turns without portal changes can share the same dictionary.
+        if (_recordUndo && ReferenceEquals(_undoStack.Peek().PortalDic, _portalPairDic))
+            _portalPairDic = new Dictionary<Vector3Int, Vector3Int>(_portalPairDic);
+
+        var partner = _portalPairDic[original];
+        _portalPairDic.Remove(original);
+        _portalPairDic[target] = partner;
+        _portalPairDic[partner] = target;
+    }
+
+    private void RestoreUndoTiles(int firstChange)
+    {
+        for (int i = _undoTileChanges.Count - 1; i >= firstChange; i--)
+        {
+            var (cell, previous) = _undoTileChanges[i];
+            int layerRow = cell / CubeSize;
+            _map[layerRow / CubeSize, layerRow % CubeSize, cell % CubeSize] = previous;
+        }
+        _undoTileChanges.RemoveRange(firstChange, _undoTileChanges.Count - firstChange);
     }
 
     public void UndoInputWrapper(InputAction.CallbackContext _) => Undo();
@@ -1106,15 +1151,14 @@ public class PuzzlePlayer : MonoBehaviour
         
         AudioManager.Instance.PlaySFX(AudioManager.SFXType.Undo);
         var s = _undoStack.Pop();
-        _map = s.Map;
+        RestoreUndoTiles(s.FirstTileChange);
         HasLaser = false;
         playerModel.position = s.PlayerPos;
         _roadLeftCount = s.RoadLeftCount;
         CurrentGhostCount = s.CurrentGhostCount;
         _portalPairDic = s.PortalDic;
 
-        _answer.Pop();
-        if (_undoStack.Count < _answer.Count) 
+        while (_answer.Count > s.AnswerCount)
             _answer.Pop();
         Moves = (short)(_moves-1);
 
@@ -1136,7 +1180,7 @@ public class PuzzlePlayer : MonoBehaviour
         if (before == (char)TileType.Empty || TileHelper.IsPainted(before)) return;
         
         var tile = TileHelper.PaintTable[before];
-        _map[layer, row, col] = tile;
+        SetMapTile(layer, row, col, tile);
         //Debug.Log(tile);
         if (useSimpleRender)
         {

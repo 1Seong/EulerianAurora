@@ -85,11 +85,18 @@ public static class PuzzleSolver
         }
     }
 
-    private sealed class Node
+    private readonly struct Node
     {
-        public State State;
-        public Node Parent;
-        public int Direction;
+        public readonly State State;
+        public readonly int TraceIndex;
+        public readonly int Direction;
+
+        public Node(State state, int traceIndex, int direction)
+        {
+            State = state;
+            TraceIndex = traceIndex;
+            Direction = direction;
+        }
     }
 
     private sealed class Search
@@ -99,6 +106,7 @@ public static class PuzzleSolver
         private readonly int _axis;
         private readonly Vector3Int[] _positions;
         private readonly bool[] _surface;
+        private readonly int[] _surfaceCells;
         private readonly int[,] _neighbors;
         private readonly int[][] _rotationGroups;
         private readonly List<int>[] _layers;
@@ -121,6 +129,7 @@ public static class PuzzleSolver
             _reached = new int[volume];
             _layers = new List<int>[size];
             _rotationGroups = new int[size][];
+            var surfaceCells = new List<int>();
             for (int i = 0; i < size; i++)
                 _layers[i] = new List<int>();
 
@@ -132,6 +141,8 @@ public static class PuzzleSolver
                 int cell = Index(position);
                 _positions[cell] = position;
                 _surface[cell] = x == 0 || y == 0 || z == 0 || x == _last || y == _last || z == _last;
+                if (_surface[cell])
+                    surfaceCells.Add(cell);
                 for (int d = 0; d < Directions.Length; d++)
                 {
                     var neighbor = position + Directions[d];
@@ -141,6 +152,7 @@ public static class PuzzleSolver
                 if (_axis >= 0)
                     _layers[position[_axis]].Add(cell);
             }
+            _surfaceCells = surfaceCells.ToArray();
 
             if (_axis < 0)
                 return;
@@ -172,8 +184,9 @@ public static class PuzzleSolver
             out string error)
         {
             var tiles = new char[_positions.Length];
-            var portals = new int[tiles.Length];
-            Array.Fill(portals, -1);
+            var portals = portalPairs != null && portalPairs.Count != 0 ? new int[tiles.Length] : null;
+            if (portals != null)
+                Array.Fill(portals, -1);
             var state = new State(tiles, portals) { Position = -1 };
             for (int cell = 0; cell < tiles.Length; cell++)
             {
@@ -236,7 +249,9 @@ public static class PuzzleSolver
             int explored = 0;
             var pending = new SortedDictionary<int, Stack<Node>>();
             var seen = new HashSet<(string tiles, string portals, int position, int ghost, bool laser, int unpainted)>();
-            var root = new Node { State = initial };
+            // Replay uses only the parent index and input, so expanded boards can be collected.
+            var trace = new List<(int parent, int direction)>();
+            var root = new Node(initial, -1, -1);
             Enqueue(root);
             seen.Add(Key(initial));
             var children = new List<Node>(Directions.Length);
@@ -253,7 +268,7 @@ public static class PuzzleSolver
 
                 explored++;
                 if (node.State.Unpainted == 0)
-                    return BuildSolution(node, initial, explored);
+                    return BuildSolution(trace, node.TraceIndex, initial, explored);
                 if (explored >= limit)
                     return new SolveResult(SolveStatus.Inconclusive,
                         $"자동 탐색 한도({limit:N0}개 상태)에 도달했습니다. 해답 존재 여부는 미확정입니다.", explored);
@@ -266,11 +281,15 @@ public static class PuzzleSolver
                     var next = Advance(node.State, d);
                     if (next == null)
                         continue;
-                    var child = new Node { State = next, Parent = node, Direction = d };
-                    if (next.Unpainted == 0)
-                        return BuildSolution(child, initial, explored);
-                    if (seen.Count < limit && seen.Add(Key(next)))
-                        children.Add(child);
+                    bool solved = next.Unpainted == 0;
+                    if (!solved && (seen.Count >= limit || !seen.Add(Key(next))))
+                        continue;
+
+                    int traceIndex = trace.Count;
+                    trace.Add((node.TraceIndex, d));
+                    if (solved)
+                        return BuildSolution(trace, traceIndex, initial, explored);
+                    children.Add(new Node(next, traceIndex, d));
                 }
                 if (depthFirst)
                     children.Sort((a, b) =>
@@ -299,11 +318,11 @@ public static class PuzzleSolver
         {
             var tiles = state.Tiles;
             string portals = null;
-            if (_axis >= 0)
+            if (_axis >= 0 && state.Portals != null)
             {
                 // Only occupied portal positions can be read by a later move or rotation.
                 var links = new List<char>();
-                for (int i = 0; i < tiles.Length; i++)
+                foreach (int i in _surfaceCells)
                     if (IsPortal(tiles[i]))
                     {
                         int partner = state.Portals[i];
@@ -313,14 +332,28 @@ public static class PuzzleSolver
                 if (links.Count != 0)
                     portals = new string(links.ToArray());
             }
-            return (new string(tiles), portals, state.Position, state.Ghost, state.Laser, state.Unpainted);
+
+            // Interior cells stay empty. TileType codes fit in a byte, so store two per char.
+            var board = string.Create((_surfaceCells.Length + 1) / 2, (tiles, cells: _surfaceCells),
+                static (key, source) =>
+                {
+                    for (int i = 0; i < source.cells.Length; i += 2)
+                    {
+                        int packed = source.tiles[source.cells[i]];
+                        if (i + 1 < source.cells.Length)
+                            packed |= source.tiles[source.cells[i + 1]] << 8;
+                        key[i / 2] = (char)packed;
+                    }
+                });
+            return (board, portals, state.Position, state.Ghost, state.Laser, state.Unpainted);
         }
 
-        private SolveResult BuildSolution(Node goal, State initial, int explored)
+        private SolveResult BuildSolution(List<(int parent, int direction)> trace, int traceIndex,
+            State initial, int explored)
         {
             var inputs = new Stack<int>();
-            for (var node = goal; node.Parent != null; node = node.Parent)
-                inputs.Push(node.Direction);
+            for (int i = traceIndex; i >= 0; i = trace[i].parent)
+                inputs.Push(trace[i].direction);
 
             var positions = new Stack<Vector3Int>();
             var directions = new List<Vector3Int>(inputs.Count);
@@ -455,7 +488,7 @@ public static class PuzzleSolver
             };
 
             var tiles = (char[])prior.Tiles.Clone();
-            var portals = (int[])prior.Portals.Clone();
+            var portals = (int[])prior.Portals?.Clone();
             foreach (int layer in group)
             foreach (int cell in _layers[layer])
             {
