@@ -56,6 +56,7 @@ public class MapEditor : MonoBehaviour
     [SerializeField] private Camera thumbnailCamera;
     private PuzzleTile[,,] _tiles;
     private bool _isValidated;
+    private CancellationTokenSource _autoTestCancellation;
     
     [SerializeField] private Button showAnswerButton;
     [SerializeField] private GameObject stopShowAnswerButton;
@@ -214,6 +215,11 @@ public class MapEditor : MonoBehaviour
         Initialize(GameManager.Instance.GetMapCreating());
     }
 
+    private void OnDisable()
+    {
+        _autoTestCancellation?.Cancel();
+    }
+
     private void OnDestroy()
     {
         if(Instance == this)
@@ -240,6 +246,7 @@ public class MapEditor : MonoBehaviour
     public void Initialize(MapCreating mapCreating) // 외부에서 데이터 넣어주고 초기화
     {
         if (mapCreating == null) return;
+        SetValidated(false);
         
         _currentMapCreating = mapCreating;
         if(_currentMapCreating.Data != null)
@@ -359,6 +366,7 @@ public class MapEditor : MonoBehaviour
 
     public void SetLayer(int index)
     {
+        SetValidated(false);
         RotAxis = _selectedAxis;
         
         _canRotate[index] = !_canRotate[index];
@@ -385,19 +393,46 @@ public class MapEditor : MonoBehaviour
         GameManager.Instance.PlayGame((char[,,])_map.Clone(), _portalPairDict, _rotAxis, _canRotate);
     }
 
-    public void AutoTest()
+    public async void AutoTest()
     {
-        var res = PuzzleSolver.Solve(_map, _portalPairDict);
-
-        if (!res.IsSolvable)
-        {
-            //Debug.Log(res.ErrorMsg);
-            PopUpManager.Instance.Show(res.ErrorMsg);
+        if (_autoTestCancellation != null || _map == null || _portalEditing)
             return;
+
+        var map = (char[,,])_map.Clone();
+        var portals = new Dictionary<Vector3Int, Vector3Int>(_portalPairDict);
+        var axis = _rotAxis;
+        var layers = (bool[])_canRotate.Clone();
+        using var cancellation = new CancellationTokenSource();
+        _autoTestCancellation = cancellation;
+        try
+        {
+            var result = await Task.Run(() => PuzzleSolver.Solve(map, portals, axis, layers,
+                cancellationToken: cancellation.Token), cancellation.Token);
+            if (cancellation.IsCancellationRequested)
+                return;
+            if (!result.IsSolvable)
+            {
+                PopUpManager.Instance.Show(result.ErrorMsg);
+                return;
+            }
+
+            SetValidated(true, result.SolutionPath);
+            PopUpManager.Instance.Show("자동 테스트를 통과했습니다!");
         }
-        
-        SetValidated(true, res.SolutionPath);
-        PopUpManager.Instance.Show("자동 테스트를 통과했습니다!");
+        catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
+        {
+            // The map changed or the editor closed before the search completed.
+        }
+        catch (Exception exception)
+        {
+            Debug.LogException(exception);
+            if (!cancellation.IsCancellationRequested)
+                PopUpManager.Instance.Show("자동 테스트 중 오류가 발생했습니다.");
+        }
+        finally
+        {
+            _autoTestCancellation = null;
+        }
     }
 
     #region ToolSet
@@ -651,6 +686,8 @@ public class MapEditor : MonoBehaviour
 
     public void SetValidated(bool validated, Stack<Vector3Int> answer = null)
     {
+        if (!validated)
+            _autoTestCancellation?.Cancel();
         _isValidated = validated;
         showAnswerButton.interactable = validated;
         exportButton.interactable = validated;
