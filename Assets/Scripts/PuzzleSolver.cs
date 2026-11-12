@@ -101,6 +101,8 @@ public static class PuzzleSolver
 
     private sealed class Search
     {
+        private const int FirstAttemptLimit = 12_000;
+
         private readonly int _size;
         private readonly int _last;
         private readonly int _axis;
@@ -233,20 +235,86 @@ public static class PuzzleSolver
         public SolveResult Solve(State initial, int limit, CancellationToken token)
         {
             token.ThrowIfCancellationRequested();
+            if (_axis < 0 && Array.TrueForAll(initial.Tiles, tile =>
+                    tile is (char)TileType.Empty or (char)TileType.Painted or (char)TileType.Road) &&
+                !HasValidStartColor(initial))
+                return new SolveResult(SolveStatus.Unsolvable,
+                    "격자 색상 수가 현재 시작점과 맞지 않아 모든 칸을 한 번씩 방문할 수 없습니다.");
+
             bool canUseRotationGraph = _axis >= 0 && Array.TrueForAll(initial.Tiles, tile =>
                 tile == (char)TileType.Empty || tile == (char)TileType.Painted ||
                 tile == (char)TileType.Road || tile == (char)TileType.Laser || IsDash(tile));
 
-            // Include all possible contacts between layers from the first expansion.
-            if (canUseRotationGraph && initial.Unpainted > 0)
-                _possibleNeighbors = BuildRotationGraph(token);
+            bool checkRotationConnectivity = _axis >= 0 && initial.Portals == null &&
+                Array.IndexOf(initial.Tiles, (char)TileType.Inv) < 0;
+            if (initial.Unpainted > 0 && (checkRotationConnectivity || canUseRotationGraph))
+            {
+                var graph = BuildRotationGraph(token);
+                if (checkRotationConnectivity)
+                {
+                    // Ghosts can revisit occupied cells, but they cannot connect separate components.
+                    int unreachable = FindUnreachableTile(initial, graph);
+                    if (unreachable >= 0)
+                        return new SolveResult(SolveStatus.Unsolvable,
+                            $"가능한 회전을 모두 고려해도 {_positions[unreachable]} 칸에 도달할 수 없습니다.");
+                }
+                if (canUseRotationGraph)
+                    _possibleNeighbors = graph;
+            }
 
-            return Explore(initial, limit, canUseRotationGraph, token);
+            // Both attempts share one state budget. The retry changes only ties.
+            int firstBudget = Math.Min(FirstAttemptLimit, limit);
+            int explored = 0;
+            var result = Explore(initial, firstBudget, canUseRotationGraph, null, token, ref explored);
+            if (result != null)
+                return result;
+            if (explored < limit)
+                result = Explore(initial, limit - explored, canUseRotationGraph, new System.Random(1), token, ref explored);
+            return result ?? new SolveResult(SolveStatus.Inconclusive,
+                $"자동 탐색 한도({limit:N0}개 상태)에 도달했습니다. 해답 존재 여부는 미확정입니다.", explored);
         }
 
-        private SolveResult Explore(State initial, int limit, bool depthFirst, CancellationToken token)
+        private bool HasValidStartColor(State state)
         {
-            int explored = 0;
+            int startColor = Color(state.Position);
+            int balance = 0;
+            foreach (int cell in _surfaceCells)
+                if (state.Tiles[cell] != (char)TileType.Empty)
+                    balance += Color(cell) == startColor ? 1 : -1;
+            return balance is 0 or 1;
+
+            int Color(int cell)
+            {
+                var p = _positions[cell];
+                return (p.x + p.y + p.z) & 1;
+            }
+        }
+
+        private int FindUnreachableTile(State state, int[][] graph)
+        {
+            int count = 1;
+            _queue[0] = state.Position;
+            _reached[state.Position] = ++_visit;
+            for (int i = 0; i < count; i++)
+            {
+                foreach (int neighbor in graph[_queue[i]])
+                {
+                    if (_reached[neighbor] == _visit || state.Tiles[neighbor] == (char)TileType.Empty)
+                        continue;
+                    _reached[neighbor] = _visit;
+                    _queue[count++] = neighbor;
+                }
+            }
+            foreach (int cell in _surfaceCells)
+                if (_reached[cell] != _visit && state.Tiles[cell] != (char)TileType.Empty)
+                    return cell;
+            return -1;
+        }
+
+        private SolveResult Explore(State initial, int budget, bool depthFirst, System.Random tieOrder,
+            CancellationToken token, ref int explored)
+        {
+            int stopAt = explored + budget;
             var pending = new SortedDictionary<int, Stack<Node>>();
             var seen = new HashSet<(string tiles, string portals, int position, int ghost, bool laser, int unpainted)>();
             // Replay uses only the parent index and input, so expanded boards can be collected.
@@ -269,9 +337,8 @@ public static class PuzzleSolver
                 explored++;
                 if (node.State.Unpainted == 0)
                     return BuildSolution(trace, node.TraceIndex, initial, explored);
-                if (explored >= limit)
-                    return new SolveResult(SolveStatus.Inconclusive,
-                        $"자동 탐색 한도({limit:N0}개 상태)에 도달했습니다. 해답 존재 여부는 미확정입니다.", explored);
+                if (explored >= stopAt)
+                    return null;
                 if (CannotFinish(node.State))
                     continue;
 
@@ -282,7 +349,7 @@ public static class PuzzleSolver
                     if (next == null)
                         continue;
                     bool solved = next.Unpainted == 0;
-                    if (!solved && (seen.Count >= limit || !seen.Add(Key(next))))
+                    if (!solved && (seen.Count >= budget || !seen.Add(Key(next))))
                         continue;
 
                     int traceIndex = trace.Count;
@@ -297,6 +364,8 @@ public static class PuzzleSolver
                         int progress = b.State.Unpainted.CompareTo(a.State.Unpainted);
                         return progress != 0 ? progress : b.Direction.CompareTo(a.Direction);
                     });
+                if (tieOrder != null)
+                    ShuffleTies(children, depthFirst, tieOrder);
                 foreach (var child in children)
                     Enqueue(child);
             }
@@ -311,6 +380,24 @@ public static class PuzzleSolver
                 if (!pending.TryGetValue(priority, out var bucket))
                     pending.Add(priority, bucket = new Stack<Node>());
                 bucket.Push(node);
+            }
+        }
+
+        private static void ShuffleTies(List<Node> children, bool depthFirst, System.Random order)
+        {
+            for (int start = 0; start < children.Count;)
+            {
+                int end = start + 1;
+                // Greedy search separates priorities when it enqueues children.
+                while (end < children.Count && (!depthFirst ||
+                    children[end].State.Unpainted == children[start].State.Unpainted))
+                    end++;
+                for (int i = end - 1; i > start; i--)
+                {
+                    int j = order.Next(start, i + 1);
+                    (children[i], children[j]) = (children[j], children[i]);
+                }
+                start = end;
             }
         }
 
