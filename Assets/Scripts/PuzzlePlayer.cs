@@ -26,6 +26,24 @@ public enum TileType
 
 public static class TileHelper
 {
+    internal static readonly Vector3Int[] Directions =
+    {
+        Vector3Int.right, Vector3Int.left, Vector3Int.up, Vector3Int.down,
+        new Vector3Int(0, 0, 1), new Vector3Int(0, 0, -1)
+    };
+
+    internal static bool IsInBounds(this Vector3Int cell, int size) =>
+        (uint)cell.x < size && (uint)cell.y < size && (uint)cell.z < size;
+
+    internal static bool IsOnSurface(this Vector3Int cell, int size)
+    {
+        int last = size - 1;
+        return cell.IsInBounds(size) &&
+            (cell.x == 0 || cell.y == 0 || cell.z == 0 || cell.x == last || cell.y == last || cell.z == last);
+    }
+
+    internal static bool IsDash(char tile) => tile >= (char)TileType.DashXp && tile <= (char)TileType.DashZm;
+
     public static bool IsPainted(char tile)
     {
         return tile is (char)TileType.Painted or (char)TileType.PortalInPainted or (char)TileType.PortalOutPainted
@@ -535,11 +553,7 @@ public class PuzzlePlayer : MonoBehaviour
                || _currentGhostCount == 0 && TileHelper.IsPainted(_map[x, y, z]);
     }
 
-    private bool IsOutOfBoundary(int x, int y, int z)
-    {
-        return x == -1 ||  x == CubeSize || y == -1 || y == CubeSize || z == -1 || z == CubeSize
-            || x > 0 && x < CubeSize-1 && y > 0  && y < CubeSize-1 && z > 0 && z < CubeSize-1;
-    }
+    private bool IsOutOfBoundary(int x, int y, int z) => !new Vector3Int(x, y, z).IsOnSurface(CubeSize);
 
     // 인덱스 계산
     private async UniTask MovePlayer(Vector3 dir, bool doSave = true)
@@ -754,10 +768,7 @@ public class PuzzlePlayer : MonoBehaviour
         await UniTask.WhenAll(allAnimTasks);
     }
 
-    bool IsOnSurface(int i, int j, int k) =>
-        i == 0 || i == CubeSize - 1 ||
-        j == 0 || j == CubeSize - 1 ||
-        k == 0 || k == CubeSize - 1;
+    private bool IsOnSurface(int i, int j, int k) => new Vector3Int(i, j, k).IsOnSurface(CubeSize);
 
     #region Rotation
     private async UniTask ApplyRotate(int x, int y, int z, bool clockWise, bool cascade = true)

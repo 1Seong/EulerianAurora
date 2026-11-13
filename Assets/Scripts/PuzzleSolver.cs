@@ -1,17 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using EulerianAurora.Maps;
 using UnityEngine;
+using static TileHelper;
 
 public static class PuzzleSolver
 {
-    private const int DefaultStateLimit = 70_000;
-
-    private static readonly Vector3Int[] Directions =
-    {
-        Vector3Int.right, Vector3Int.left, Vector3Int.up, Vector3Int.down,
-        new Vector3Int(0, 0, 1), new Vector3Int(0, 0, -1)
-    };
+    internal const int DefaultStateLimit = 70_000;
 
     public enum SolveStatus
     {
@@ -29,15 +25,20 @@ public static class PuzzleSolver
         public Stack<Vector3Int> SolutionPath { get; }
         public IReadOnlyList<Vector3Int> SolutionInputs { get; }
         public int ExploredStates { get; }
+        public MapGimmick UsedGimmicks { get; }
+        public int ChoicePoints { get; }
 
         internal SolveResult(SolveStatus status, string message, int explored = 0,
-            Stack<Vector3Int> path = null, IReadOnlyList<Vector3Int> inputs = null)
+            Stack<Vector3Int> path = null, IReadOnlyList<Vector3Int> inputs = null,
+            MapGimmick used = MapGimmick.None, int choicePoints = 0)
         {
             Status = status;
             ErrorMsg = message;
             ExploredStates = explored;
             SolutionPath = path;
             SolutionInputs = inputs;
+            UsedGimmicks = used;
+            ChoicePoints = choicePoints;
         }
     }
 
@@ -45,21 +46,72 @@ public static class PuzzleSolver
         int rotationAxis = 0, bool[] canRotate = null, int stateLimit = DefaultStateLimit,
         CancellationToken cancellationToken = default)
     {
+        if (stateLimit < 1)
+            throw new ArgumentOutOfRangeException(nameof(stateLimit));
+        var error = PrepareSearch(map, portalPairs, rotationAxis, canRotate, out var search, out var initial);
+        return error ?? search.Solve(initial, stateLimit, cancellationToken);
+    }
+
+    public static SolveResult VerifySequence(char[,,] map, Dictionary<Vector3Int, Vector3Int> portalPairs,
+        IReadOnlyList<Vector3Int> inputs, int rotationAxis = 0, bool[] canRotate = null)
+        => VerifySequence(map, portalPairs, inputs, rotationAxis, canRotate, false);
+
+    internal static SolveResult VerifyPortalInverterSequence(char[,,] map,
+        Dictionary<Vector3Int, Vector3Int> portalPairs, IReadOnlyList<Vector3Int> inputs,
+        int rotationAxis, bool[] canRotate, bool measureChoices = false)
+        => VerifySequence(map, portalPairs, inputs, rotationAxis, canRotate, true, measureChoices);
+
+    internal static SolveResult MeasureSequence(char[,,] map, Dictionary<Vector3Int, Vector3Int> portalPairs,
+        IReadOnlyList<Vector3Int> inputs, int rotationAxis, bool[] canRotate)
+        => VerifySequence(map, portalPairs, inputs, rotationAxis, canRotate, false, measureChoices: true);
+
+    private static SolveResult VerifySequence(char[,,] map, Dictionary<Vector3Int, Vector3Int> portalPairs,
+        IReadOnlyList<Vector3Int> inputs, int rotationAxis, bool[] canRotate, bool requireSequence,
+        bool measureChoices = false)
+    {
+        if (inputs == null)
+            throw new ArgumentNullException(nameof(inputs));
+        var error = PrepareSearch(map, portalPairs, rotationAxis, canRotate, out var search, out var initial);
+        if (error != null)
+            return error;
+
+        var directionIndices = new int[inputs.Count];
+        for (int i = 0; i < inputs.Count; i++)
+            directionIndices[i] = Array.IndexOf(Directions, inputs[i]);
+        return search.Replay(initial, directionIndices, 0, requireSequence, measureChoices);
+    }
+
+    internal static SolveResult FindGimmickRoute(char[,,] map, Dictionary<Vector3Int, Vector3Int> portals,
+        int axis, bool[] layers, MapGimmick required, bool bypass, int limit, CancellationToken token)
+    {
+        var error = PrepareSearch(map, portals, axis, layers, out var search, out var initial);
+        return error ?? search.FindGimmickRoute(initial, required, bypass, limit, token);
+    }
+
+    internal static SolveStatus CheckPortalInverterBypass(char[,,] map,
+        Dictionary<Vector3Int, Vector3Int> portalPairs, int rotationAxis, bool[] canRotate,
+        int stateLimit, CancellationToken token)
+    {
+        if (stateLimit < 1)
+            throw new ArgumentOutOfRangeException(nameof(stateLimit));
+        var error = PrepareSearch(map, portalPairs, rotationAxis, canRotate, out var search, out var initial);
+        return error?.Status ?? search.FindBypass(initial, stateLimit, token);
+    }
+
+    private static SolveResult PrepareSearch(char[,,] map, Dictionary<Vector3Int, Vector3Int> portalPairs,
+        int rotationAxis, bool[] canRotate, out Search search, out State initial)
+    {
+        search = null;
+        initial = null;
         if (map == null || map.Length == 0 || map.GetLength(0) != map.GetLength(1) ||
             map.GetLength(0) != map.GetLength(2))
             return new SolveResult(SolveStatus.InvalidMap, "맵 크기가 올바르지 않습니다.");
         if (rotationAxis < 0 || rotationAxis > 3 ||
             rotationAxis != 0 && (canRotate == null || canRotate.Length != map.GetLength(0)))
             return new SolveResult(SolveStatus.InvalidMap, "회전 설정이 올바르지 않습니다.");
-        if (stateLimit < 1)
-            throw new ArgumentOutOfRangeException(nameof(stateLimit));
-
-        var search = new Search(map.GetLength(0), rotationAxis, canRotate);
-        var initial = search.ReadMap(map, portalPairs, out var error);
-        if (initial == null)
-            return new SolveResult(SolveStatus.InvalidMap, error);
-
-        return search.Solve(initial, stateLimit, cancellationToken);
+        search = new Search(map.GetLength(0), rotationAxis, canRotate);
+        initial = search.ReadMap(map, portalPairs, out var error);
+        return initial == null ? new SolveResult(SolveStatus.InvalidMap, error) : null;
     }
 
     private sealed class State
@@ -70,6 +122,8 @@ public static class PuzzleSolver
         public int Unpainted;
         public int Ghost;
         public bool Laser;
+        public byte SequenceProgress;
+        public MapGimmick UsedGimmicks;
 
         public State(char[] tiles, int[] portals)
         {
@@ -82,7 +136,8 @@ public static class PuzzleSolver
             // Portal coordinates change only when a layer rotates.
             return new State((char[])Tiles.Clone(), Portals)
             {
-                Position = Position, Unpainted = Unpainted, Ghost = Ghost, Laser = Laser
+                Position = Position, Unpainted = Unpainted, Ghost = Ghost, Laser = Laser,
+                SequenceProgress = SequenceProgress, UsedGimmicks = UsedGimmicks
             };
         }
     }
@@ -146,13 +201,13 @@ public static class PuzzleSolver
                 var position = new Vector3Int(x, y, z);
                 int cell = Index(position);
                 _positions[cell] = position;
-                _surface[cell] = x == 0 || y == 0 || z == 0 || x == _last || y == _last || z == _last;
+                _surface[cell] = position.IsOnSurface(size);
                 if (_surface[cell])
                     surfaceCells.Add(cell);
                 for (int d = 0; d < Directions.Length; d++)
                 {
                     var neighbor = position + Directions[d];
-                    _neighbors[cell, d] = InBounds(neighbor) ? Index(neighbor) : -1;
+                    _neighbors[cell, d] = neighbor.IsInBounds(size) ? Index(neighbor) : -1;
                 }
 
                 if (_axis >= 0)
@@ -182,9 +237,6 @@ public static class PuzzleSolver
         }
 
         private int Index(Vector3Int p) => (p.x * _size + p.y) * _size + p.z;
-
-        private bool InBounds(Vector3Int p) =>
-            (uint)p.x < _size && (uint)p.y < _size && (uint)p.z < _size;
 
         public State ReadMap(char[,,] map, Dictionary<Vector3Int, Vector3Int> portalPairs,
             out string error)
@@ -222,7 +274,7 @@ public static class PuzzleSolver
                 if (!IsPortal(tile))
                     continue;
                 if (portalPairs == null || !portalPairs.TryGetValue(p, out var partner) ||
-                    !InBounds(partner) || !portalPairs.TryGetValue(partner, out var reverse) || reverse != p ||
+                    !partner.IsInBounds(_size) || !portalPairs.TryGetValue(partner, out var reverse) || reverse != p ||
                     map[partner.x, partner.y, partner.z] != (char)(tile == (char)TileType.PortalIn
                         ? TileType.PortalOut : TileType.PortalIn))
                 {
@@ -396,12 +448,22 @@ public static class PuzzleSolver
             return -1;
         }
 
+        public SolveResult FindGimmickRoute(State initial, MapGimmick required, bool bypass, int budget,
+            CancellationToken token)
+        {
+            int explored = 0;
+            return Explore(initial, budget, false, null, 0, token, ref explored, required: required, bypass: bypass)
+                ?? new SolveResult(SolveStatus.Inconclusive, "기믹 검사 탐색 한도에 도달했습니다.", explored);
+        }
+
         private SolveResult Explore(State initial, int budget, bool depthFirst, System.Random tieOrder,
-            int retryBudget, CancellationToken token, ref int explored, bool preferInverter = false)
+            int retryBudget, CancellationToken token, ref int explored, bool preferInverter = false,
+            MapGimmick required = MapGimmick.None, bool bypass = false)
         {
             int visited = 0;
             var pending = new SortedDictionary<int, Stack<Node>>();
-            var seen = new HashSet<(string tiles, string portals, int position, int ghost, bool laser, int unpainted)>();
+            var seen = new HashSet<(string, string, int, int, bool, int, MapGimmick)>();
+            bool trackGimmicks = required != MapGimmick.None;
             // Replay uses only the parent index and input, so expanded boards can be collected.
             var trace = new List<(int parent, int direction)>();
             var root = new Node(initial, -1, -1);
@@ -422,7 +484,11 @@ public static class PuzzleSolver
                 explored++;
                 visited++;
                 if (node.State.Unpainted == 0)
-                    return BuildSolution(trace, node.TraceIndex, initial, explored);
+                {
+                    if (Accepts(node.State))
+                        return BuildSolution(trace, node.TraceIndex, initial, explored);
+                    continue;
+                }
                 if (visited >= budget)
                     return null;
                 if (retryBudget > 0 && visited == RetryAfter)
@@ -433,16 +499,20 @@ public static class PuzzleSolver
                         return retry;
                     _invalidTransition = originalInvalidTransition;
                 }
-                if (CannotFinish(node.State))
+                if (!trackGimmicks && CannotFinish(node.State))
                     continue;
 
                 children.Clear();
                 for (int d = 0; d < Directions.Length; d++)
                 {
-                    var next = Advance(node.State, d);
+                    var next = Advance(node.State, d, trackGimmicks: trackGimmicks);
                     if (next == null)
                         continue;
+                    if (trackGimmicks)
+                        next.UsedGimmicks &= required;
                     bool solved = next.Unpainted == 0;
+                    if (bypass && (next.UsedGimmicks & required) == required || solved && !Accepts(next))
+                        continue;
                     if (!solved && (seen.Count >= budget || !seen.Add(Key(next))))
                         continue;
 
@@ -468,9 +538,13 @@ public static class PuzzleSolver
                 ? new SolveResult(SolveStatus.Inconclusive, "탐색 중 올바르지 않은 포탈 연결을 발견했습니다.", explored)
                 : new SolveResult(SolveStatus.Unsolvable, "해답이 존재하지 않습니다.", explored);
 
+            bool Accepts(State state) => !trackGimmicks || ((state.UsedGimmicks & required) == required) != bypass;
+
             void Enqueue(Node node)
             {
                 int priority = depthFirst ? 0 : node.State.Unpainted;
+                if (trackGimmicks && !bypass && (node.State.UsedGimmicks & required) != required)
+                    priority += _surfaceCells.Length;
                 if (preferInverter)
                     priority = InverterPriority(node, trace);
                 if (!pending.TryGetValue(priority, out var bucket))
@@ -520,7 +594,7 @@ public static class PuzzleSolver
             }
         }
 
-        private (string, string, int, int, bool, int) Key(State state)
+        private (string, string, int, int, bool, int, MapGimmick) Key(State state)
         {
             var tiles = state.Tiles;
             string portals = null;
@@ -551,7 +625,7 @@ public static class PuzzleSolver
                         key[i / 2] = (char)packed;
                     }
                 });
-            return (board, portals, state.Position, state.Ghost, state.Laser, state.Unpainted);
+            return (board, portals, state.Position, state.Ghost, state.Laser, state.Unpainted, state.UsedGimmicks);
         }
 
         private SolveResult BuildSolution(List<(int parent, int direction)> trace, int traceIndex,
@@ -560,24 +634,91 @@ public static class PuzzleSolver
             var inputs = new Stack<int>();
             for (int i = traceIndex; i >= 0; i = trace[i].parent)
                 inputs.Push(trace[i].direction);
+            return Replay(initial, inputs, explored);
+        }
 
+        public SolveStatus FindBypass(State initial, int limit, CancellationToken token)
+        {
+            var pending = new Stack<State>();
+            var seen = new HashSet<((string, string, int, int, bool, int, MapGimmick), byte)>
+                { (Key(initial), initial.SequenceProgress) };
+            pending.Push(initial);
+            bool truncated = false;
+            while (pending.Count != 0)
+            {
+                token.ThrowIfCancellationRequested();
+                var state = pending.Pop();
+                if (state.Unpainted == 0)
+                {
+                    if (Array.TrueForAll(state.Tiles, tile => tile == (char)TileType.Empty || TileHelper.IsPainted(tile)))
+                        return SolveStatus.Solved;
+                    truncated = true;
+                    continue;
+                }
+                for (int direction = 0; direction < Directions.Length; direction++)
+                {
+                    var next = Advance(state, direction, trackSequence: true);
+                    if (next == null || next.SequenceProgress == 2)
+                        continue;
+                    var key = (Key(next), next.SequenceProgress);
+                    if (seen.Contains(key))
+                        continue;
+                    if (seen.Count == limit)
+                    {
+                        truncated = true;
+                        continue;
+                    }
+                    seen.Add(key);
+                    pending.Push(next);
+                }
+            }
+            return truncated || _invalidTransition ? SolveStatus.Inconclusive : SolveStatus.Unsolvable;
+        }
+
+        public SolveResult Replay(State initial, IReadOnlyCollection<int> inputs, int explored,
+            bool requireSequence = false, bool measureChoices = false)
+        {
             var positions = new Stack<Vector3Int>();
             var directions = new List<Vector3Int>(inputs.Count);
             var state = initial;
+            int choices = 0;
             foreach (int input in inputs)
             {
+                int step = directions.Count + 1;
+                if (input < 0 || state.Unpainted == 0)
+                    return new SolveResult(SolveStatus.Inconclusive,
+                        $"{step}번째 입력이 유효하지 않거나 이미 클리어했습니다.", explored);
+                if (measureChoices)
+                {
+                    for (int alternative = 0; alternative < Directions.Length; alternative++)
+                    {
+                        if (alternative == input || Advance(state, alternative) == null)
+                            continue;
+                        choices++;
+                        break;
+                    }
+                }
+                state = Advance(state, input, positions, requireSequence, trackGimmicks: true);
+                if (state == null)
+                    return new SolveResult(SolveStatus.Inconclusive, $"{step}번째 입력으로 이동할 수 없습니다.", explored);
                 directions.Add(Directions[input]);
-                state = Advance(state, input, positions);
             }
 
+            if (state.Unpainted != 0)
+                return new SolveResult(SolveStatus.Inconclusive, $"입력 종료 후 미도색 칸이 {state.Unpainted}개 남았습니다.", explored);
             if (Array.Exists(state.Tiles, tile => tile != (char)TileType.Empty && !TileHelper.IsPainted(tile)))
                 return new SolveResult(SolveStatus.Inconclusive, "남은 칸 수와 타일의 색칠 상태가 일치하지 않습니다.", explored);
-            return new SolveResult(SolveStatus.Solved, null, explored, positions, directions.AsReadOnly());
+            if (requireSequence && state.SequenceProgress != 2)
+                return new SolveResult(SolveStatus.Inconclusive, "포탈 출구 도착 후 인버터가 발동하는 순서를 확인하지 못했습니다.", explored);
+            return new SolveResult(SolveStatus.Solved, null, explored, positions, directions.AsReadOnly(),
+                state.UsedGimmicks, choices);
         }
 
-        private State Advance(State initial, int direction, Stack<Vector3Int> path = null)
+        private State Advance(State initial, int direction, Stack<Vector3Int> path = null, bool trackSequence = false,
+            bool trackGimmicks = false)
         {
             var state = initial;
+            bool dashing = false;
             while (true)
             {
                 int neighbor = _neighbors[state.Position, direction];
@@ -590,20 +731,31 @@ public static class PuzzleSolver
                     int[] group = _axis >= 0 ? _rotationGroups[_positions[state.Position][_axis]] : null;
                     if (state.Ghost > 0 || group == null || Directions[direction][_axis] != 0)
                         return state == initial ? null : state;
-                    return Rotate(state, direction, group, path);
+                    var rotated = Rotate(state, direction, group, path);
+                    if (rotated != null && trackGimmicks)
+                        rotated.UsedGimmicks |= MapGimmick.Rotation;
+                    return rotated;
                 }
 
                 if (state == initial)
                     state = initial.Copy();
                 path?.Push(_positions[neighbor]);
                 if (state.Ghost > 0)
+                {
+                    if (trackGimmicks)
+                        state.UsedGimmicks |= MapGimmick.Ghost;
                     state.Ghost--;
+                }
                 if (state.Laser)
                 {
+                    if (trackGimmicks)
+                        state.UsedGimmicks |= MapGimmick.Laser;
                     FireLaser(state, neighbor, direction);
                     return state;
                 }
 
+                if (dashing && trackGimmicks)
+                    state.UsedGimmicks |= MapGimmick.Dash;
                 state.Position = neighbor;
                 if (state.Ghost > 0)
                     return state;
@@ -619,6 +771,10 @@ public static class PuzzleSolver
                             return null;
                         }
                         state.Position = exit;
+                        if (trackGimmicks)
+                            state.UsedGimmicks |= MapGimmick.Portal;
+                        if (trackSequence && state.SequenceProgress == 0)
+                            state.SequenceProgress = 1;
                         path?.Push(_positions[exit]);
                         if (!TileHelper.IsPainted(state.Tiles[exit]))
                         {
@@ -632,6 +788,10 @@ public static class PuzzleSolver
                         state.Ghost = TileHelper.GhostCount;
                         return state;
                     case TileType.Inv:
+                        if (trackGimmicks)
+                            state.UsedGimmicks |= MapGimmick.Inverter;
+                        if (trackSequence && state.SequenceProgress == 1)
+                            state.SequenceProgress = 2;
                         Invert(state);
                         return state;
                     case TileType.Laser:
@@ -641,6 +801,7 @@ public static class PuzzleSolver
 
                 if (!IsDash(tile))
                     return state;
+                dashing = true;
                 direction = tile - (char)TileType.DashXp;
             }
         }
@@ -729,7 +890,8 @@ public static class PuzzleSolver
             return new State(tiles, portals)
             {
                 Position = Index(rotatedPosition), Unpainted = prior.Unpainted,
-                Ghost = prior.Ghost, Laser = prior.Laser
+                Ghost = prior.Ghost, Laser = prior.Laser,
+                UsedGimmicks = prior.UsedGimmicks, SequenceProgress = prior.SequenceProgress
             };
         }
 
@@ -742,9 +904,6 @@ public static class PuzzleSolver
 
         private static bool IsPortal(char tile) =>
             tile >= (char)TileType.PortalIn && tile <= (char)TileType.PortalOutPainted;
-
-        private static bool IsDash(char tile) =>
-            tile >= (char)TileType.DashXp && tile <= (char)TileType.DashZm;
 
         private bool CannotFinish(State state)
         {

@@ -23096,6 +23096,14 @@ PrefabInstance:
       value: 
       objectReference: {fileID: 1399696002}
     - target: {fileID: 8842427892844910700, guid: ccca12b9be394194bb70ece4d1770c19, type: 3}
+      propertyPath: mapAssistDockReference
+      value:
+      objectReference: {fileID: 1505306532}
+    - target: {fileID: 8842427892844910700, guid: ccca12b9be394194bb70ece4d1770c19, type: 3}
+      propertyPath: mapAssistPanelStyle
+      value:
+      objectReference: {fileID: 1179287457}
+    - target: {fileID: 8842427892844910700, guid: ccca12b9be394194bb70ece4d1770c19, type: 3}
       propertyPath: resetPanel
       value: 
       objectReference: {fileID: 850160249}
