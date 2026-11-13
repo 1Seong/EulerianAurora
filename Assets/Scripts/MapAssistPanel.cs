@@ -170,10 +170,9 @@ internal sealed class MapAssistPanel : MonoBehaviour
         if (_request != null)
             return;
         var requestData = new MapAssistRequest { Operation = MapAssistOperation.CreateMap };
-        if (!string.IsNullOrWhiteSpace(_input.text) &&
-            !MapAssistRequestInterpreter.TryInterpret(_input.text, out requestData))
+        if (!string.IsNullOrWhiteSpace(_input.text))
         {
-            SetFeedback("이 요청은 현재 해석할 수 없어요.\n" + RequestHint);
+            SetFeedback("자연어 요청은 백엔드 연결 후 사용할 수 있어요. 지금은 입력을 비우고 아래 설정만 사용할 수 있습니다.");
             return;
         }
         requestData.UiConditions = ReadUiConditions();

@@ -18,9 +18,10 @@ namespace EulerianAurora.Maps
         CreateMap
     }
 
+    // 백엔드에서 전달한 구조화된 요청 데이터다. 게임 내부에서 자연어를 해석하지 않는다.
     public sealed class MapAssistRequest
     {
-        // UI 값은 자연어/JSON 요청과 분리하여 충돌 검사에 사용한다.
+        // 로컬 UI 값은 백엔드 응답과 분리한다. JSON에서 덮어쓸 수 없다.
         [JsonIgnore]
         public GenerationUiSettings UiConditions { get; set; }
         public MapAssistOperation Operation { get; set; }
