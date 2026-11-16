@@ -29,6 +29,7 @@ public static class NewMapGeneratorSmoke
         try
         {
             var total = Stopwatch.StartNew();
+            CheckGenerationRetries();
             CheckLongRoadGeneration();
             CheckRoadSpacing();
             CheckLiveGenerationSettings();
@@ -470,6 +471,25 @@ public static class NewMapGeneratorSmoke
             EditorApplication.Exit(0);
         }
         catch (Exception error) { Debug.LogException(error); EditorApplication.Exit(1); }
+    }
+
+    private static void CheckGenerationRetries()
+    {
+        var request = Request(10, MapDifficulty.Hard);
+        request.UiConditions.AllowedGimmicks = MapGimmick.None;
+        var options = MapGenerationOptions.Default;
+        var limits = new MapGenerationLimits { PlacementAttempts = 1 };
+        var (failed, attempts) = MapTools.GenerateWithRetries(null, request, 0, 5, default, options, limits: limits);
+        Check(failed.Status == MapGenerationStatus.SearchLimitReached && attempts == 5,
+            "탐색 한도에 걸리면 총 다섯 번 시도한다");
+
+        var (found, successfulAttempts) = MapTools.GenerateWithRetries(null, request, 0, 5, default, options);
+        Check(found.Candidate != null && successfulAttempts == 1, "후보를 찾으면 즉시 재시도를 끝낸다");
+
+        request.PreserveStart = true;
+        var (invalid, invalidAttempts) = MapTools.GenerateWithRetries(null, request, 0, 5, default, options);
+        Check(invalid.Status == MapGenerationStatus.UnsupportedConditions && invalidAttempts == 1,
+            "지원하지 않는 조건을 같은 요청으로 반복하지 않는다");
     }
 
     private static void CheckRoadSpacing()

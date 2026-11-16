@@ -266,15 +266,16 @@ public class MapEditor : MonoBehaviour
     internal bool CanOpenAssist => !_portalEditing && !_isShowingAnswer && !escPanel.activeSelf &&
         !resetPanel.activeSelf && !GameManager.Instance.blockIndicators;
 
-    internal Task<MapGenerationResult> GenerateAssistProposal(
-        MapAssistRequest request, int seed, CancellationToken token)
+    // 한 번의 요청은 같은 설정을 사용하고 탐색에 실패한 경우에만 시드를 바꿔 다시 시도한다.
+    internal Task<(MapGenerationResult Result, int Attempts)> GenerateAssistProposal(
+        MapAssistRequest request, int seed, int maxAttempts, IProgress<int> progress, CancellationToken token)
     {
         if (request.Size.HasValue && request.Size.Value != cubeSize)
-            return Task.FromResult(new MapGenerationResult(MapGenerationStatus.UnsupportedConditions, null,
-                "이 에디터에서는 현재 보드와 같은 크기의 맵을 만들 수 있어요."));
+            return Task.FromResult((new MapGenerationResult(MapGenerationStatus.UnsupportedConditions, null,
+                "이 에디터에서는 현재 보드와 같은 크기의 맵을 만들 수 있어요."), 0));
         var map = MapDocument.FromBoard(_map, _portalPairDict, _rotAxis, _canRotate);
         var options = MapGenerationSettings.ReadOptions();
-        return Task.Run(() => MapTools.Generate(map, request, seed, token: token, options: options), token);
+        return Task.Run(() => MapTools.GenerateWithRetries(map, request, seed, maxAttempts, token, options, progress), token);
     }
 
     internal void RenderAssistPreview(MapCandidate proposal)

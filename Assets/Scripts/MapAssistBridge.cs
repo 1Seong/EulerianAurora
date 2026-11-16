@@ -31,6 +31,26 @@ namespace EulerianAurora.Maps
     public static class MapTools
     {
         public const string GenerationHint = "신규 맵 생성 · 길·포탈·대시·레이저·고스트·인버터·회전";
+
+        // 탐색 실패만 새 시드로 재시도한다. 조건 오류는 그대로 반환한다.
+        internal static (MapGenerationResult Result, int Attempts) GenerateWithRetries(MapDocument map,
+            MapAssistRequest request, int seed, int maxAttempts, CancellationToken token,
+            MapGenerationOptions options, IProgress<int> progress = null, MapGenerationLimits limits = null)
+        {
+            if (maxAttempts < 1) throw new ArgumentOutOfRangeException(nameof(maxAttempts));
+            var seeds = new System.Random(seed);
+            for (int attempt = 1; ; attempt++)
+            {
+                token.ThrowIfCancellationRequested();
+                progress?.Report(attempt);
+                var result = Generate(map, request, seed, token, limits, options);
+                if (result.Candidate != null || attempt == maxAttempts ||
+                    result.Status is not (MapGenerationStatus.NoCandidateFound or MapGenerationStatus.SearchLimitReached))
+                    return (result, attempt);
+                seed = seeds.Next();
+            }
+        }
+
         public static MapGenerationResult Generate(MapDocument map, MapAssistRequest request, int seed,
             CancellationToken token = default, MapGenerationLimits limits = null, MapGenerationOptions? options = null)
         {

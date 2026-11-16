@@ -10,6 +10,7 @@ using UnityEngine.UI;
 internal sealed class MapAssistPanel : MonoBehaviour
 {
     private const string RequestHint = MapTools.GenerationHint;
+    private const int GenerationAttempts = 5;
     private MapEditor _editor;
     private TMP_FontAsset _font;
     private TMP_Text _buttonLabelStyle;
@@ -21,8 +22,8 @@ internal sealed class MapAssistPanel : MonoBehaviour
     private Button _apply;
     private Button _compare;
     private Button _previousButton;
+    private Button _nextButton;
     private TMP_Text _compareLabel;
-    private TMP_Text _previousLabel;
     private TMP_Text _feedback;
     private TMP_InputField _input;
     private Toggle _autoGimmicks;
@@ -35,11 +36,11 @@ internal sealed class MapAssistPanel : MonoBehaviour
 
     private GameObject _previousSelection;
     private CancellationTokenSource _request;
-    private MapGenerationResult _latest;
-    private MapGenerationResult _previous;
-    private bool _viewingPrevious;
+    private readonly List<MapGenerationResult> _history = new();
+    private int _historyIndex = -1;
     private bool _showingPreview;
-    private MapGenerationResult ActiveResult => _viewingPrevious ? _previous : _latest;
+    private bool _conditionsChanged;
+    private MapGenerationResult ActiveResult => _historyIndex >= 0 ? _history[_historyIndex] : null;
 
     internal bool IsOpen => _modal != null && _modal.activeSelf;
 
@@ -121,18 +122,16 @@ internal sealed class MapAssistPanel : MonoBehaviour
         feedbackScroll.horizontal = false;
         feedbackScroll.movementType = ScrollRect.MovementType.Clamped;
         feedbackScroll.scrollSensitivity = 20;
-        _send = CreateButton(body, "후보 생성", Send, out _, 152, 34, 12, 50, Vector2.zero);
-        _previousButton = CreateButton(body, "이전 후보", SwitchCandidate, out _previousLabel,
-            152, 34, 176, 50, Vector2.zero);
+        _send = CreateButton(body, "후보 생성", Send, out _, 104, 34, 12, 50, Vector2.zero);
+        _previousButton = CreateButton(body, "이전 후보", () => SwitchCandidate(-1), out _,
+            98, 34, 124, 50, Vector2.zero);
+        _nextButton = CreateButton(body, "다음 후보", () => SwitchCandidate(1), out _,
+            98, 34, 230, 50, Vector2.zero);
         _compare = CreateButton(body, "원본 보기", Compare, out _compareLabel, 152, 34, -176, 10,
             Vector2.right);
         _apply = CreateButton(body, "후보 적용", Apply, out _, 152, 34, -12, 10, Vector2.right);
-        _previousButton.interactable = _compare.interactable = _apply.interactable = false;
-        _input.onValueChanged.AddListener(_ =>
-        {
-            ClearPreview();
-            SetFeedback(RequestHint);
-        });
+        RefreshCandidateButtons();
+        _input.onValueChanged.AddListener(_ => ConditionsChanged());
         _modal.SetActive(false);
     }
 
@@ -143,6 +142,12 @@ internal sealed class MapAssistPanel : MonoBehaviour
         _open.gameObject.SetActive(false);
         _modal.SetActive(true);
         LockOtherUI();
+        if (_history.Count > 0)
+        {
+            _historyIndex = _history.Count - 1;
+            PresentCandidate();
+        }
+        else SetFeedback(RequestHint);
         EventSystem.current?.SetSelectedGameObject(_send.gameObject);
     }
 
@@ -150,13 +155,13 @@ internal sealed class MapAssistPanel : MonoBehaviour
     {
         _request?.Cancel();
         _request = null;
-        ClearPreview();
+        ShowPreview(false);
         _modal.SetActive(false);
         UnlockOtherUI();
         _open.gameObject.SetActive(true);
         _input.interactable = _send.interactable = true;
         RefreshOptions();
-        SetFeedback(RequestHint);
+        RefreshCandidateButtons();
     }
 
     private void OnDisable()
@@ -181,21 +186,28 @@ internal sealed class MapAssistPanel : MonoBehaviour
         _request = request;
         RefreshOptions();
         _input.interactable = _send.interactable = false;
-        _previousButton.interactable = _compare.interactable = _apply.interactable = false;
-        SetFeedback("요청한 조건에 맞는 배치와 해답을 확인하고 있어요.");
+        RefreshCandidateButtons();
+        SetFeedback($"조건에 맞는 후보를 찾고 있어요. 최대 {GenerationAttempts}회 시도합니다.");
+        var progress = new Progress<int>(attempt =>
+        {
+            if (_request != request) return;
+            SetFeedback($"조건에 맞는 후보를 찾고 있어요. ({attempt}/{GenerationAttempts})");
+        });
         try
         {
-            var result = await _editor.GenerateAssistProposal(requestData, Guid.NewGuid().GetHashCode(), request.Token);
-            if (request.IsCancellationRequested)
+            var (result, attempts) = await _editor.GenerateAssistProposal(requestData, Guid.NewGuid().GetHashCode(),
+                GenerationAttempts, progress, request.Token);
+            if (_request != request || request.IsCancellationRequested)
                 return;
             if (result.Candidate == null)
             {
-                SetFeedback(_latest == null ? result.Message : result.Message + "\n기존 후보는 계속 볼 수 있어요.");
+                string message = attempts > 1 ? $"{attempts}회 시도했지만 후보를 찾지 못했어요.\n{result.Message}" : result.Message;
+                SetFeedback(ActiveResult == null ? message : message + "\n기존 후보는 계속 볼 수 있어요.");
                 return;
             }
-            _previous = _latest;
-            _latest = result;
-            _viewingPrevious = false;
+            _history.Add(result);
+            _historyIndex = _history.Count - 1;
+            _conditionsChanged = false;
             PresentCandidate();
         }
         catch (OperationCanceledException) when (request.IsCancellationRequested)
@@ -214,38 +226,42 @@ internal sealed class MapAssistPanel : MonoBehaviour
                 _request = null;
                 RefreshOptions();
                 _input.interactable = _send.interactable = true;
-                _compare.interactable = _apply.interactable = _latest != null;
-                _previousButton.interactable = _previous != null;
+                RefreshCandidateButtons();
             }
         }
     }
 
-    private void ClearPreview()
+    // 미리보기 조작과 기록 탐색은 새 후보를 생성하는 동안 잠근다.
+    private void RefreshCandidateButtons()
     {
-        if (_showingPreview)
-            _editor.RenderAssistPreview(null);
-        _showingPreview = false;
-        _latest = _previous = null;
-        _viewingPrevious = false;
-        _previousLabel.text = "이전 후보";
-        _previousButton.interactable = _compare.interactable = _apply.interactable = false;
+        bool ready = _request == null && ActiveResult != null;
+        _compare.interactable = _apply.interactable = ready;
+        _previousButton.interactable = ready && _historyIndex > 0;
+        _nextButton.interactable = ready && _historyIndex + 1 < _history.Count;
     }
 
-    private void SwitchCandidate()
+    // 기록에서 앞뒤로 이동한다. 새 생성은 현재 위치와 관계없이 기록 끝에 추가된다.
+    private void SwitchCandidate(int offset)
     {
-        if (_previous == null)
+        int index = _historyIndex + offset;
+        if (_request != null || index < 0 || index >= _history.Count)
             return;
-        _viewingPrevious = !_viewingPrevious;
+        _historyIndex = index;
         PresentCandidate();
     }
 
     private void PresentCandidate()
     {
-        var result = ActiveResult;
-        var candidate = result.Candidate;
-        _previousLabel.text = _viewingPrevious ? "최신 후보" : "이전 후보";
-        SetFeedback(result.Message);
+        ShowCandidateFeedback();
         ShowPreview(true);
+        RefreshCandidateButtons();
+    }
+
+    // 설정을 바꿔도 기존 후보는 생성 당시 조건으로 계속 볼 수 있다.
+    private void ShowCandidateFeedback()
+    {
+        string note = _conditionsChanged ? "\n바꾼 설정은 다음 생성에 적용돼요." : "";
+        SetFeedback($"후보 {_historyIndex + 1}/{_history.Count}{note}\n{ActiveResult.Message}");
     }
 
     private void Compare() => ShowPreview(!_showingPreview);
@@ -255,8 +271,9 @@ internal sealed class MapAssistPanel : MonoBehaviour
         var candidate = ActiveResult?.Candidate;
         if (candidate == null)
             return;
+        if (show || _showingPreview)
+            _editor.RenderAssistPreview(show ? candidate : null);
         _showingPreview = show;
-        _editor.RenderAssistPreview(_showingPreview ? candidate : null);
         _compareLabel.text = _showingPreview ? "원본 보기" : "후보 보기";
     }
 
@@ -345,9 +362,13 @@ internal sealed class MapAssistPanel : MonoBehaviour
     private void ConditionsChanged()
     {
         RefreshOptions();
-        if (_feedback == null) return;
-        ClearPreview();
-        SetFeedback(RequestHint);
+        if (_feedback == null || _request != null) return;
+        if (ActiveResult == null) SetFeedback(RequestHint);
+        else
+        {
+            _conditionsChanged = true;
+            ShowCandidateFeedback();
+        }
     }
 
     private void RefreshOptions()
