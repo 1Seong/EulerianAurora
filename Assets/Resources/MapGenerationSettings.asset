@@ -38,7 +38,7 @@ MonoBehaviour:
       RotationGroupMinLength: 1
       RotationGroupMaxLength: 2
       OptionalRotationPercent: 10
-      SecondRotationGroupPercent: 0
+      AdditionalRotationGroupPercent: 0
       StartInsideRotationGroup: 0
     Medium:
       MaximumBudget: 45
@@ -57,7 +57,7 @@ MonoBehaviour:
       RotationGroupMinLength: 1
       RotationGroupMaxLength: 4
       OptionalRotationPercent: 20
-      SecondRotationGroupPercent: 25
+      AdditionalRotationGroupPercent: 25
       StartInsideRotationGroup: 0
     Hard:
       MaximumBudget: 80
@@ -76,7 +76,7 @@ MonoBehaviour:
       RotationGroupMinLength: 2
       RotationGroupMaxLength: 6
       OptionalRotationPercent: 35
-      SecondRotationGroupPercent: 50
+      AdditionalRotationGroupPercent: 50
       StartInsideRotationGroup: 1
     Search:
       PlacementAttempts: 1500
@@ -100,5 +100,12 @@ MonoBehaviour:
       XAxisWeight: 1
       YAxisWeight: 1
       ZAxisWeight: 1
-      SecondRotationGroupLength: 2
       RotationGroupGap: 1
+    Layout:
+      RegionPenalty: 4
+      ContactPenalty: 2
+      CrowdingPenalty: 4
+      SquarePenalty: 3
+      ScoreVariation: 1
+      StraightRunLength: 3
+      BendPenalty: 2

@@ -9,6 +9,7 @@ namespace EulerianAurora.Maps
         public MapGimmick Kind { get; }
         public int Cost { get; }
         public int Weight { get; }
+        // 한 종류의 비용과 상대 가중치를 검증해 보관한다.
         public GimmickBudgetRule(MapGimmick kind, int cost, int weight)
         {
             if ((kind != MapGimmick.None && !GenerationBudgetPolicy.IsSingleKind(kind)) || cost < 1 || weight < 1)
@@ -21,6 +22,7 @@ namespace EulerianAurora.Maps
     {
         public int Maximum { get; }
         public IReadOnlyList<GimmickBudgetRule> Rules { get; }
+        // 호출자가 나중에 배열을 바꿔도 정책에 영향이 없도록 규칙을 복사한다.
         public GenerationBudgetPolicy(int maximum, params GimmickBudgetRule[] rules)
         {
             if (maximum < 1 || rules == null || rules.Length != 7)
@@ -32,12 +34,17 @@ namespace EulerianAurora.Maps
             Maximum = maximum;
             Rules = Array.AsReadOnly((GimmickBudgetRule[])rules.Clone());
         }
+        // 등록된 한 종류의 비용을 반환한다.
         public int Cost(MapGimmick kind)
         {
-            foreach (var rule in Rules)
+            for (int i = 0; i < Rules.Count; i++)
+            {
+                var rule = Rules[i];
                 if (rule.Kind == kind) return rule.Cost;
+            }
             throw new ArgumentOutOfRangeException(nameof(kind));
         }
+        // 여러 플래그가 섞이지 않은 기믹인지 검사한다.
         public static bool IsSingleKind(MapGimmick kind) =>
             kind != MapGimmick.None && (kind & ~MapGimmick.All) == 0 &&
             (((int)kind & ((int)kind - 1)) == 0);
@@ -56,22 +63,40 @@ namespace EulerianAurora.Maps
         {
             if (random == null || feasible == null) throw new ArgumentNullException();
             if (remaining < 0 || (allowed & ~MapGimmick.All) != 0) throw new ArgumentOutOfRangeException();
-            var candidates = new HashSet<MapGimmick>(feasible);
+            bool roadFeasible = false;
+            MapGimmick gimmicks = MapGimmick.None;
+            foreach (var candidate in feasible)
+            {
+                if (candidate == MapGimmick.None) roadFeasible = true;
+                else if (IsSingleKind(candidate)) gimmicks |= candidate;
+            }
+            return TryPick(random, allowed, remaining, roadFeasible, gimmicks, out kind);
+        }
+
+        // 생성기 내부에서는 이미 정리된 종류 플래그로 추첨해 임시 컬렉션을 만들지 않는다.
+        internal bool TryPick(Random random, MapGimmick allowed, int remaining, bool roadFeasible,
+            MapGimmick gimmicks, out MapGimmick kind)
+        {
+            var eligibleGimmicks = gimmicks & allowed;
             long total = 0;
-            foreach (var rule in Rules)
+            for (int i = 0; i < Rules.Count; i++)
+            {
+                var rule = Rules[i];
                 if (Eligible(rule)) total += rule.Weight;
+            }
             kind = MapGimmick.None;
             if (total == 0) return false;
             double draw = random.NextDouble() * total;
-            foreach (var rule in Rules)
+            for (int i = 0; i < Rules.Count; i++)
             {
+                var rule = Rules[i];
                 if (!Eligible(rule)) continue;
                 draw -= rule.Weight;
                 if (draw < 0) { kind = rule.Kind; return true; }
             }
             return false;
-            bool Eligible(GimmickBudgetRule rule) => candidates.Contains(rule.Kind) && rule.Cost <= remaining &&
-                (rule.Kind == MapGimmick.None || (allowed & rule.Kind) != 0);
+            bool Eligible(GimmickBudgetRule rule) => rule.Cost <= remaining &&
+                (rule.Kind == MapGimmick.None ? roadFeasible : (eligibleGimmicks & rule.Kind) != 0);
         }
     }
 }

@@ -30,6 +30,7 @@ public static class NewMapGeneratorSmoke
         {
             var total = Stopwatch.StartNew();
             CheckLongRoadGeneration();
+            CheckRoadSpacing();
             CheckLiveGenerationSettings();
             // 수동 UI는 선택한 기믹 모두의 실제 사용을 요구한다. 배열로 필수 조건을 따로 주지 않는다.
             var supported = MapGimmick.Portal | MapGimmick.Dash | MapGimmick.Laser | MapGimmick.Ghost;
@@ -43,7 +44,7 @@ public static class NewMapGeneratorSmoke
                 Check(result.Plan.RequiredGimmicks == selection, "selected mask becomes required");
                 Check(result.Candidate.Witness.UsedGimmicks == selection, "every selected kind used, unselected excluded");
                 Check(MapTools.Verify(result.Candidate.Map, result.Candidate.Witness.SolutionInputs).IsSolvable, "manual selection witness");
-                if (selection == supported) Check(result.Plan.ReservedBudget == 19, "manual connector budget");
+                if (selection == supported) Check(result.Plan.ReservedBudget == 18, "manual connector budget");
             }
             var selectedZero = Request(10, MapDifficulty.Easy);
             selectedZero.UiConditions.AllowedGimmicks = MapGimmick.Portal;
@@ -200,10 +201,9 @@ public static class NewMapGeneratorSmoke
                 Check(MapTools.Verify(candidate.Map,candidate.Witness.SolutionInputs).IsSolvable,"laser final replay");
                 int actualCost = candidate.Map.Tiles.Count(c=>c==(char)TileType.Road)
                     + candidate.Map.Tiles.Count(TileHelper.IsDash)*2 + candidate.Map.PortalPairs.Length*3 + amount*4;
-                Check(candidate.GenerationCost==actualCost && actualCost<=result.Plan.Budget.Maximum,"laser exact budget and rollback");
                 var sim=new PuzzleSolver.Simulation(size);
                 sim.Reset(candidate.Map.CopyTiles(),candidate.Map.CopyPortalLinks());
-                int fires=0;
+                int fires=0, beamRoads=0;
                 foreach(var input in candidate.Witness.SolutionInputs)
                 {
                     int beforeEvents=sim.Events.Count, remaining=sim.Unpainted;
@@ -214,10 +214,13 @@ public static class NewMapGeneratorSmoke
                         Check(sim.Position==position,"firing does not move player");
                         Check(remaining>sim.Unpainted,"firing paints targets");
                         beamLengths.Add(remaining-sim.Unpainted);
+                        beamRoads += remaining - sim.Unpainted;
                         firingDirections.Add(input);
                         fires++;
                     }
                 }
+                Check(candidate.GenerationCost == actualCost - beamRoads &&
+                    candidate.GenerationCost <= result.Plan.Budget.Maximum, "laser exact budget and rollback");
                 Check(fires==amount,"all laser tiles fired");
                 laserMaps++;
             }
@@ -259,19 +262,19 @@ public static class NewMapGeneratorSmoke
             Check(MapTools.Generate(null,blockedLaser,1).Status==MapGenerationStatus.UnsupportedConditions,"UI laser forbidden");
             var expensive=Request(10,MapDifficulty.Easy); expensive.UiConditions = null;
             expensive.GimmickCounts=new[]{new MapGimmickCount{Kind=MapGimmick.Laser,Count=5}};
-            Check(MapTools.Generate(null,expensive,1).Status==MapGenerationStatus.UnsupportedConditions,"laser targets and escape reserve");
+            Check(MapTools.Generate(null,expensive,1).Status==MapGenerationStatus.UnsupportedConditions,"laser and escape reserve");
             for(int seed=0;seed<6;seed++)
             {
                 var automatic=Request(10,MapDifficulty.Any); automatic.UiConditions = null;
                 automatic.GimmickCounts=new[]{new MapGimmickCount{Kind=MapGimmick.Laser,Count=5}};
                 var result=MapTools.Generate(null,automatic,seed);
                 Check(result.Candidate!=null,"automatic laser connector budget: "+result.Message);
-                Check(result.Plan.AutomaticDifficulty && result.Plan.Difficulty!=MapDifficulty.Easy && result.Plan.ReservedBudget==30,"automatic avoids insufficient connector budget");
+                Check(result.Plan.AutomaticDifficulty && result.Plan.Difficulty!=MapDifficulty.Easy && result.Plan.ReservedBudget==25,"automatic avoids insufficient connector budget");
             }
             var repeated=Request(10,MapDifficulty.Any); repeated.UiConditions = null;
             repeated.RequiredOrder=Enumerable.Repeat(MapAssistEvent.LaserFired,5).ToArray();
             var repeatedResult=MapTools.Generate(null,repeated,2);
-            Check(repeatedResult.Candidate!=null && repeatedResult.Plan.ReservedBudget==30,"repeated event construction reserve");            // 뒤에 더한 길이 앞선 발사 범위를 늘리면 기존 이동 입력이 실패하는 것을 확인한다.
+            Check(repeatedResult.Candidate!=null && repeatedResult.Plan.ReservedBudget==25,"repeated event construction reserve");            // 뒤에 더한 길이 앞선 발사 범위를 늘리면 기존 이동 입력이 실패하는 것을 확인한다.
             var changed=new char[5,5,5];
             for(int x=0;x<5;x++)for(int y=0;y<5;y++)for(int z=0;z<5;z++)changed[x,y,z]=(char)TileType.Empty;
             changed[0,0,0]=(char)TileType.Player; changed[1,0,0]=(char)TileType.Laser;
@@ -308,14 +311,22 @@ public static class NewMapGeneratorSmoke
                     candidate.Map.Tiles.Count(c => TileHelper.IsDash(c)) * 2 + candidate.Map.PortalPairs.Length * 3 +
                     candidate.Map.Tiles.Count(c => c == (char)TileType.Laser) * 4 + amount * 5 +
                     candidate.Map.Tiles.Count(c => c == (char)TileType.Inv) * 10;
-                Check(sim.Reset(candidate.Map.CopyTiles(), candidate.Map.CopyPortalLinks()), "ghost reset");
+                var originalTiles = candidate.Map.CopyTiles();
+                Check(sim.Reset(originalTiles, candidate.Map.CopyPortalLinks()), "ghost reset");
                 int activeMoves = 0, revisits = 0, rotationPlacements = 0;
                 bool rotatedLast = false;
                 var visited = new HashSet<Vector3Int> { sim.Position };
+                var beamRoads = new HashSet<Vector3Int>();
                 foreach (var input in candidate.Witness.SolutionInputs)
                 {
                     int ghost = sim.GhostRemaining, unpainted = sim.Unpainted, eventCount = sim.Events.Count;
                     Check(sim.TryStep(input), "ghost step");
+                    if (sim.Events.Skip(eventCount).Contains(MapGimmick.Laser))
+                        for (int i = 1; i <= unpainted - sim.Unpainted; i++)
+                        {
+                            var cell = sim.InitialCell(sim.Position + input * i);
+                            if (originalTiles[cell.x, cell.y, cell.z] == (char)TileType.Road) beamRoads.Add(cell);
+                        }
                     bool rotated = sim.Events.Skip(eventCount).Contains(MapGimmick.Rotation);
                     if (rotated && !rotatedLast) rotationPlacements++;
                     rotatedLast = rotated;
@@ -330,7 +341,7 @@ public static class NewMapGeneratorSmoke
                 }
                 Check(activeMoves == amount * TileHelper.GhostCount && revisits >= amount, "bounded painted-cell backtracking");
                 Check(sim.Events.Count(e => e == MapGimmick.Ghost) == amount, "one ghost event per activation");
-                Check(candidate.GenerationCost == expectedCost + 8 * rotationPlacements,
+                Check(candidate.GenerationCost == expectedCost + 8 * rotationPlacements - beamRoads.Count,
                     "ghost cost and reused cells");
                 Check(sim.GhostRemaining == 0 && sim.Unpainted == 0, "ghost ended before clear");
                 ghostMaps++;
@@ -461,6 +472,55 @@ public static class NewMapGeneratorSmoke
         catch (Exception error) { Debug.LogException(error); EditorApplication.Exit(1); }
     }
 
+    private static void CheckRoadSpacing()
+    {
+        var tuning = MapGenerationOptions.Default;
+        tuning.Medium.MaximumBudget = 65;
+        tuning.Medium.TargetBudgetMinPercent = 100;
+        var request = Request(10, MapDifficulty.Medium);
+        request.UiConditions.AllowedGimmicks = MapGimmick.None;
+        int contacts = 0, pairDistance = 0, tiles = 0, pairs = 0;
+        int bends = 0, moves = 0, longStraightMoves = 0;
+        for (int seed = 0; seed < 16; seed++)
+        {
+            var result = MapTools.Generate(null, request, seed, options: tuning);
+            Check(result.Candidate != null && result.Candidate.GenerationCost == 65, $"공간 배치 비교 맵 {seed}");
+            var inputs = result.Candidate.Witness.SolutionInputs;
+            int run = 1;
+            for (int i = 1; i < inputs.Count; i++)
+            {
+                if (inputs[i] == inputs[i - 1]) run++;
+                else { bends++; run = 1; }
+                if (run > 5) longStraightMoves++;
+                moves++;
+            }
+            var board = result.Candidate.Map.CopyTiles();
+            var occupied = new List<Vector3Int>();
+            for (int x = 0; x < 10; x++)
+            for (int y = 0; y < 10; y++)
+            for (int z = 0; z < 10; z++)
+                if (board[x, y, z] != (char)TileType.Empty) occupied.Add(new Vector3Int(x, y, z));
+            var cells = new HashSet<Vector3Int>(occupied);
+            for (int i = 0; i < occupied.Count; i++)
+            {
+                var cell = occupied[i];
+                if (TileHelper.Directions.Count(direction => cells.Contains(cell + direction)) >= 3) contacts++;
+                for (int j = 0; j < i; j++)
+                {
+                    var delta = cell - occupied[j];
+                    pairDistance += Math.Abs(delta.x) + Math.Abs(delta.y) + Math.Abs(delta.z);
+                    pairs++;
+                }
+            }
+            tiles += occupied.Count;
+        }
+        Check(contacts * 4 < tiles, "고정 길이 표본에서 세 칸 이상에 맞닿는 타일 비율");
+        Check(pairDistance > 8 * pairs, "고정 길이 표본의 공간 분포");
+        Check(bends * 5 > moves && bends * 2 < moves, "직선과 꺾임의 균형: 매 칸 지그재그 방지");
+        Check(longStraightMoves * 5 < moves, "긴 직선에 편중되지 않는 경로");
+        Debug.Log($"ROAD_LAYOUT bends={bends}/{moves} longStraight={longStraightMoves} contacts={contacts}/{tiles}");
+    }
+
     private static void CheckLongRoadGeneration()
     {
         var options = MapGenerationOptions.Default;
@@ -525,14 +585,21 @@ public static class NewMapGeneratorSmoke
             Check(automatic.Candidate != null && automatic.Plan.Difficulty == MapDifficulty.Hard, "자동 난이도 가중치 적용");
 
             tuning = before;
-            tuning.Sampling.MinimumLaserRayLength = 2;
-            tuning.Sampling.MaximumLaserRayLength = 2;
+            tuning.Costs.Road = 2;
             tuning.Costs.Laser = 7;
+            tuning.Easy.MaximumBudget = 9;
+            tuning.Easy.TargetBudgetMinPercent = 100;
             request.Difficulty = MapDifficulty.Easy;
             request.UiConditions.AllowedGimmicks = MapGimmick.Laser;
-            var laser = MapTools.Generate(null, request, 0, options: tuning);
-            Check(laser.Candidate != null && laser.Plan.ReservedBudget == 10 &&
-                laser.Plan.Budget.Cost(MapGimmick.Laser) == 7, "레이저 사거리와 비용을 예약에 적용");
+            for (int length = 1; length <= 3; length++)
+            {
+                tuning.Sampling.MinimumLaserRayLength = tuning.Sampling.MaximumLaserRayLength = length;
+                var laser = MapTools.Generate(null, request, 0, options: tuning);
+                Check(laser.Candidate != null && laser.Plan.ReservedBudget == 9 && laser.Candidate.GenerationCost == 9 &&
+                    laser.Candidate.Map.Tiles.Count(t => t == (char)TileType.Road) == length + 1 &&
+                    MapTools.Verify(laser.Candidate.Map, laser.Candidate.Witness.SolutionInputs).IsSolvable,
+                    $"사거리 {length}의 레이저 고정 비용과 별도 연결 길");
+            }
             tuning.Search.InputLimit = 0;
             Check(MapTools.Generate(null, request, 0, options: tuning).Status == MapGenerationStatus.UnsupportedConditions,
                 "잘못된 인스펙터 설정 거절");
@@ -573,6 +640,43 @@ public static class NewMapGeneratorSmoke
         var rotated = new Vector3Int(1, 4, 0);
         Check(cursor.InitialCell(rotated) == original && cursor.CurrentCell(original) == rotated &&
             cursor.InitialDirection(rotated, Vector3Int.up) == spin, "회전 레이어의 초기 위치와 방향 복원");
+
+        var tuning = MapGenerationOptions.Default;
+        var profile = tuning.Hard;
+        profile.RotationGroupMinLength = profile.RotationGroupMaxLength = 3;
+        profile.AdditionalRotationGroupPercent = 100;
+        const int gap = 2;
+        for (int seed = 0; seed < 8; seed++)
+        {
+            var sampled = NewMapGenerator.SampleRotationGroups(32, 15, profile, gap, new System.Random(seed), out int origin);
+            Check(sampled[origin] && !sampled[0] && !sampled[31], "회전 묶음 안에 시작점 배치");
+            int groupCount = 0, previousEnd = -gap;
+            for (int layer = 1; layer < 31;)
+            {
+                if (!sampled[layer]) { layer++; continue; }
+                int first = layer;
+                while (sampled[layer]) layer++;
+                Check(layer - first == 3 && first - previousEnd >= gap, "모든 회전 묶음에 공통 길이와 간격 적용");
+                previousEnd = layer;
+                groupCount++;
+            }
+            Check(groupCount >= 3, "세 번째 이후 회전 묶음 생성");
+        }
+
+        tuning.Hard.RotationGroupMinLength = tuning.Hard.RotationGroupMaxLength = 1;
+        tuning.Hard.AdditionalRotationGroupPercent = 100;
+        tuning.Sampling.MaximumConsecutiveTurns = 1;
+        var multiple = Request(10, MapDifficulty.Hard);
+        multiple.UiConditions.AllowedGimmicks = MapGimmick.Rotation;
+        multiple.GimmickCounts = new[] { new MapGimmickCount { Kind = MapGimmick.Rotation, Count = 3 } };
+        bool foundThree = false;
+        for (int seed = 0; seed < 20 && !foundThree; seed++)
+        {
+            var result = MapTools.Generate(null, multiple, seed, options: tuning);
+            if (result.Candidate?.Map.RotatingLayers.Count(layer => layer) != 3) continue;
+            foundThree = MapTools.Verify(result.Candidate.Map, result.Candidate.Witness.SolutionInputs).IsSolvable;
+        }
+        Check(foundThree, "서로 다른 세 회전 묶음을 쓴 생성 맵 재생");
 
         var noLayer = Request(2, MapDifficulty.Easy);
         noLayer.UiConditions.AllowedGimmicks = MapGimmick.Rotation;
@@ -790,11 +894,11 @@ public static class NewMapGeneratorSmoke
             var map = candidate.Map;
             Check(map.Tiles.Count(t => t == (char)TileType.Inv) == count, "인버터 정확한 개수");
             int cost = map.Tiles.Count(t => t == (char)TileType.Road) + 4 + 10 * count;
-            Check(cost == candidate.GenerationCost && cost <= result.Plan.Budget.Maximum, "인버터 비용과 교체한 길 비용");
             Check(MapTools.Verify(map, candidate.Witness.SolutionInputs).IsSolvable, "레이저·인버터 완전 재생");
 
             var sim = new PuzzleSolver.Simulation(map.Size);
-            Check(sim.Reset(map.CopyTiles(), map.CopyPortalLinks()), "복합 맵 초기화");
+            var originalTiles = map.CopyTiles();
+            Check(sim.Reset(originalTiles, map.CopyPortalLinks()), "복합 맵 초기화");
             var visited = new HashSet<Vector3Int> { sim.Position };
             var shot = new HashSet<Vector3Int>();
             bool enteredShotTile = false, activatedShotInverter = false;
@@ -817,6 +921,8 @@ public static class NewMapGeneratorSmoke
                 }
             }
             Check(sim.Unpainted == 0 && enteredShotTile, "레이저로만 칠했던 칸을 반전 후 처음 방문");
+            cost -= shot.Count(cell => originalTiles[cell.x, cell.y, cell.z] == (char)TileType.Road);
+            Check(cost == candidate.GenerationCost && cost <= result.Plan.Budget.Maximum, "레이저 대상 길과 후속 인버터 비용");
             Check(sim.Events.SequenceEqual(new[] { MapGimmick.Laser }.Concat(Enumerable.Repeat(MapGimmick.Inverter, count))),
                 "레이저 이후 정확한 횟수만큼 인버터 발동");
             if (count == 2) Check(activatedShotInverter, "레이저에 맞았던 두 번째 인버터가 발동");

@@ -128,6 +128,7 @@ public static class PuzzleSolver
         internal Vector3Int Position => _state == null ? throw new InvalidOperationException()
             : new Vector3Int(_state.Position / (_size * _size), _state.Position / _size % _size, _state.Position % _size);
 
+        // 분기들이 공유할 좌표, 이웃, 회전 묶음 정보를 준비한다.
         internal Simulation(int size, int axis = 0, bool[] layers = null)
         {
             if (size < 2 || size > 32 || axis < 0 || axis > 3 || axis != 0 && layers?.Length != size)
@@ -136,6 +137,7 @@ public static class PuzzleSolver
             _search = new Search(size, axis, layers);
         }
 
+        // 상태가 필요할 때만 참조와 이벤트를 이어받는다. 공유된 상태는 입력 처리 시 복사한다.
         private Simulation(Simulation source, bool copyState)
         {
             _size = source._size;
@@ -148,14 +150,21 @@ public static class PuzzleSolver
         // Advance는 입력 상태를 복사한 뒤 바꾸므로 분기 사이에 원본을 공유할 수 있다.
         internal Simulation Fork(bool copyState = true) => new(this, copyState);
 
+        // 실행 중인 보드의 타일을 읽는다.
         internal char TileAt(Vector3Int cell) => _state.Tiles[(cell.x * _size + cell.y) * _size + cell.z];
+        // 공통 가지치기 규칙으로 현재 상태에서 클리어할 수 없는 경우를 판별한다.
         internal bool CannotFinish() => _search.CannotFinish(_state);
+        // 현재 좌표를 회전 전 저장 좌표로 되돌린다.
         internal Vector3Int InitialCell(Vector3Int cell) => _search.TransformCell(_state, cell, toInitial: true);
+        // 저장 좌표에 누적 회전을 적용한다.
         internal Vector3Int CurrentCell(Vector3Int cell) => _search.TransformCell(_state, cell, toInitial: false);
+        // 해당 레이어의 회전량만큼 이동 방향을 역변환한다.
         internal Vector3Int InitialDirection(Vector3Int at, Vector3Int direction) =>
             _search.TransformCell(_state, at, toInitial: true, direction: direction);
+        // 회전 중 두 포탈 위치가 같은 궤도를 공유하는지 확인한다.
         internal bool SharePortalOrbit(Vector3Int a, Vector3Int b) => _search.SharePortalOrbit(a, b);
 
+        // 재생한 접두 경로의 레이어 회전량이 기존 분기와 일치하는지 검사한다.
         internal bool SameLayerTurns(Simulation other)
         {
             var turns = _state.LayerTurns;
@@ -163,6 +172,7 @@ public static class PuzzleSolver
                 turns != null && other._state.LayerTurns != null && turns.AsSpan().SequenceEqual(other._state.LayerTurns);
         }
 
+        // 초기 배치를 읽어 이전 실행과 공유하지 않는 새 상태를 만든다.
         internal bool Reset(char[,,] map, Dictionary<Vector3Int, Vector3Int> portals)
         {
             _events.Clear();
@@ -173,6 +183,7 @@ public static class PuzzleSolver
             return _state != null;
         }
 
+        // 공유된 상태를 보존하면서 일반 입력을 한 번 실행한다.
         internal bool TryStep(Vector3Int input) => TryStep(input, rotationPreview: false);
 
         // 일반 길 전용 생성에서는 새 칸이 앞선 입력의 결과를 바꾸지 않는다.
@@ -184,21 +195,30 @@ public static class PuzzleSolver
             _state = previous.Copy();
             _state.Tiles[(cell.x * _size + cell.y) * _size + cell.z] = (char)TileType.Road;
             _state.Unpainted = 1;
-            if (TryStep(input)) return true;
+            if (TryStep(input, rotationPreview: false, ownsState: true)) return true;
             _state = previous;
             return false;
         }
 
-        // 완성된 접두 보드에서도 회전 후보의 위치만 미리 보고, 실제 입력은 새 길까지 넣어 검증한다.
-        internal bool TryStep(Vector3Int input, bool rotationPreview)
+        // Reset으로 만든 독립 상태를 재생한다. 실패하면 이 분기를 폐기해야 한다.
+        internal bool TryReplayStep(Vector3Int input) =>
+            TryStep(input, rotationPreview: false, ownsState: true);
+
+        // 미리보기는 모든 칸을 칠한 보드에서도 회전할 위치를 시험할 수 있다.
+        internal bool TryStep(Vector3Int input, bool rotationPreview) =>
+            TryStep(input, rotationPreview, ownsState: false);
+
+        // 일반 분기는 현재 상태를 공유하며, 독점 재생만 타일 배열을 직접 갱신한다.
+        private bool TryStep(Vector3Int input, bool rotationPreview, bool ownsState)
         {
             int direction = Array.IndexOf(Directions, input);
             if (_state == null || !rotationPreview && _state.Unpainted == 0 || direction < 0) return false;
             int count = _events.Count;
-            var next = _search.Advance(_state, direction, trackGimmicks: true, events: _events);
+            var next = _search.Advance(_state, direction, trackGimmicks: true, events: _events, ownsState: ownsState);
             if (next == null)
             {
                 _events.RemoveRange(count, _events.Count - count);
+                if (ownsState) _state = null;
                 return false;
             }
             _state = next;
@@ -769,6 +789,7 @@ public static class PuzzleSolver
             return truncated || _invalidTransition ? SolveStatus.Inconclusive : SolveStatus.Unsolvable;
         }
 
+        // 고정 입력을 끝까지 실행해 클리어 여부와 사용한 기믹을 확인한다.
         public SolveResult Replay(State initial, IReadOnlyCollection<int> inputs, int explored,
             bool requireSequence = false, bool measureChoices = false)
         {
@@ -792,7 +813,8 @@ public static class PuzzleSolver
                         break;
                     }
                 }
-                state = Advance(state, input, positions, requireSequence, trackGimmicks: true);
+                // 첫 입력은 호출자의 초기 상태를 보존한다. 이후 상태는 이 재생만 소유한다.
+                state = Advance(state, input, positions, requireSequence, trackGimmicks: true, ownsState: step > 1);
                 if (state == null)
                     return new SolveResult(SolveStatus.Inconclusive, $"{step}번째 입력으로 이동할 수 없습니다.", explored);
                 directions.Add(Directions[input]);
@@ -808,23 +830,25 @@ public static class PuzzleSolver
                 state.UsedGimmicks, choices);
         }
 
+        // 입력 하나를 처리한다. ownsState는 실패 시 폐기할 수 있는 독점 상태에만 사용한다.
         public State Advance(State initial, int direction, Stack<Vector3Int> path = null, bool trackSequence = false,
-            bool trackGimmicks = false, List<MapGimmick> events = null)
+            bool trackGimmicks = false, List<MapGimmick> events = null, bool ownsState = false)
         {
             var state = initial;
             bool dashing = false;
+            bool advanced = false;
             while (true)
             {
                 int neighbor = _neighbors[state.Position, direction];
                 if (neighbor < 0 || !_surface[neighbor])
-                    return state == initial ? null : state;
+                    return advanced ? state : null;
 
                 char tile = state.Tiles[neighbor];
                 if (tile == (char)TileType.Empty || state.Ghost == 0 && TileHelper.IsPainted(tile))
                 {
                     int[] group = _axis >= 0 ? _rotationGroups[_positions[state.Position][_axis]] : null;
                     if (state.Ghost > 0 || group == null || Directions[direction][_axis] != 0)
-                        return state == initial ? null : state;
+                        return advanced ? state : null;
                     var rotated = Rotate(state, direction, group, path);
                     if (rotated != null && trackGimmicks)
                     {
@@ -834,8 +858,11 @@ public static class PuzzleSolver
                     return rotated;
                 }
 
-                if (state == initial)
-                    state = initial.Copy();
+                if (!advanced)
+                {
+                    if (!ownsState) state = initial.Copy();
+                    advanced = true;
+                }
                 path?.Push(_positions[neighbor]);
                 if (state.Ghost > 0)
                 {

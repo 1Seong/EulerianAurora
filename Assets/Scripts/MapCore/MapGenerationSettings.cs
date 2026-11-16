@@ -45,6 +45,7 @@ namespace EulerianAurora.Maps
                 Draw(nameof(MapGenerationOptions.Hard), "어려움");
                 Draw(nameof(MapGenerationOptions.Search), "탐색 한도");
                 Draw(nameof(MapGenerationOptions.Sampling), "공통 후보 설정");
+                Draw(nameof(MapGenerationOptions.Layout), "경로 형태 균형");
                 serializedObject.ApplyModifiedProperties();
 
                 var error = settings.options.ValidationError();
