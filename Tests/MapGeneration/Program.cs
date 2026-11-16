@@ -3,6 +3,17 @@ int checks = 0;
 void Check(bool value, string name) { if (!value) throw new Exception(name); checks++; }
 bool Resolve(GenerationUiSettings ui, GenerationConditions text) => GenerationConditionResolver.TryResolve(ui,text,out _,out _);
 var manual = new GenerationUiSettings { AutomaticGimmicks=false, AllowedGimmicks=MapGimmick.Dash, AutomaticDifficulty=false, Difficulty=MapDifficulty.Easy };
+Check(GenerationConditionResolver.TryResolve(manual,null,out var manualPlan,out _) &&
+    manualPlan.RequiredGimmicks==MapGimmick.Dash && manualPlan.ReservedBudget==2,"manual selection requires use and reserves cost");
+Check(!Resolve(manual,new(){Counts=new[]{new MapGimmickCount{Kind=MapGimmick.Dash,Count=0}}}),"selected zero conflicts");
+Check(!Resolve(manual,new(){AllowedGimmicks=MapGimmick.Portal}),"backend cannot remove selected gimmick");
+var selected=new GenerationUiSettings{AutomaticGimmicks=false,AllowedGimmicks=MapGimmick.Portal|MapGimmick.Ghost};
+Check(GenerationConditionResolver.TryResolve(selected,null,out var selectedPlan,out _) &&
+    selectedPlan.RequiredGimmicks==selected.AllowedGimmicks && selectedPlan.ReservedBudget==8,"all selected kinds required");
+selected.AutomaticGimmicks=true;
+Check(GenerationConditionResolver.TryResolve(selected,null,out var automaticPlan,out _) &&
+    automaticPlan.RequiredGimmicks==MapGimmick.None && automaticPlan.ReservedBudget==0,"automatic ignores stored selections");
+Check(!Resolve(new(){AutomaticGimmicks=false,AllowedGimmicks=MapGimmick.All,AutomaticDifficulty=false,Difficulty=MapDifficulty.Easy},null),"selected minimum budget conflict");
 Check(!Resolve(manual,new() { Difficulty=MapDifficulty.Hard }),"difficulty conflict");
 Check(!Resolve(manual,new() { RequiredOrder=new[]{MapGimmick.Portal} }),"forbidden sequence");
 Check(!Resolve(manual,new() { Counts=new[]{new MapGimmickCount { Kind=MapGimmick.Portal, Count=1 }} }),"forbidden count");

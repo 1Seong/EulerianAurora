@@ -6,7 +6,10 @@ namespace EulerianAurora.Maps
     public enum MapAssistEvent
     {
         PortalExit,
-        InverterActivated
+        InverterActivated,
+        DashUsed,
+        LaserFired,
+        GhostUsed
     }
 
     public enum MapAssistOperation
@@ -24,7 +27,7 @@ namespace EulerianAurora.Maps
         // 로컬 UI 값은 백엔드 응답과 분리한다. JSON에서 덮어쓸 수 없다.
         [JsonIgnore]
         public GenerationUiSettings UiConditions { get; set; }
-        public MapAssistOperation Operation { get; set; }
+        public MapAssistOperation Operation { get; set; } = MapAssistOperation.CreateMap;
         public bool PreserveStart { get; set; }
         public bool PreservePortals { get; set; }
         public bool PreserveRotation { get; set; }

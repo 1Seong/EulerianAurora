@@ -114,6 +114,69 @@ public static class PuzzleSolver
         return initial == null ? new SolveResult(SolveStatus.InvalidMap, error) : null;
     }
 
+    // 생성기가 부분 배치에 입력을 재생할 때도 탐색과 동일한 Advance 규칙을 사용한다.
+    // 인스턴스마다 상태를 보관하므로 서로 다른 요청에서 공유하지 않는다.
+    internal sealed class Simulation
+    {
+        private readonly Search _search;
+        private readonly int _size;
+        private State _state;
+        private readonly List<MapGimmick> _events = new();
+        internal IReadOnlyList<MapGimmick> Events => _events;
+        internal int GhostRemaining => _state?.Ghost ?? 0;
+        internal int Unpainted => _state?.Unpainted ?? -1;
+        internal Vector3Int Position => _state == null ? throw new InvalidOperationException()
+            : new Vector3Int(_state.Position / (_size * _size), _state.Position / _size % _size, _state.Position % _size);
+
+        internal Simulation(int size, int axis = 0, bool[] layers = null)
+        {
+            if (size < 2 || size > 32 || axis < 0 || axis > 3 || axis != 0 && layers?.Length != size)
+                throw new ArgumentException("시뮬레이션의 크기 또는 회전 설정이 올바르지 않습니다.");
+            _size = size;
+            _search = new Search(size, axis, layers);
+        }
+
+        private Simulation(Simulation source, bool copyState)
+        {
+            _size = source._size;
+            _search = source._search;
+            if (!copyState) return;
+            _state = source._state;
+            _events.AddRange(source._events);
+        }
+
+        // Advance는 입력 상태를 복사한 뒤 바꾸므로 분기 사이에 원본을 공유할 수 있다.
+        internal Simulation Fork(bool copyState = true) => new(this, copyState);
+
+        internal char TileAt(Vector3Int cell) => _state.Tiles[(cell.x * _size + cell.y) * _size + cell.z];
+        internal bool CannotFinish() => _search.CannotFinish(_state);
+
+        internal bool Reset(char[,,] map, Dictionary<Vector3Int, Vector3Int> portals)
+        {
+            _events.Clear();
+            _state = null;
+            if (map == null || map.GetLength(0) != _size || map.GetLength(1) != _size || map.GetLength(2) != _size)
+                return false;
+            _state = _search.ReadMap(map, portals, out _);
+            return _state != null;
+        }
+
+        internal bool TryStep(Vector3Int input)
+        {
+            int direction = Array.IndexOf(Directions, input);
+            if (_state == null || _state.Unpainted == 0 || direction < 0) return false;
+            int count = _events.Count;
+            var next = _search.Advance(_state, direction, trackGimmicks: true, events: _events);
+            if (next == null)
+            {
+                _events.RemoveRange(count, _events.Count - count);
+                return false;
+            }
+            _state = next;
+            return true;
+        }
+    }
+
     private sealed class State
     {
         public readonly char[] Tiles;
@@ -714,8 +777,8 @@ public static class PuzzleSolver
                 state.UsedGimmicks, choices);
         }
 
-        private State Advance(State initial, int direction, Stack<Vector3Int> path = null, bool trackSequence = false,
-            bool trackGimmicks = false)
+        public State Advance(State initial, int direction, Stack<Vector3Int> path = null, bool trackSequence = false,
+            bool trackGimmicks = false, List<MapGimmick> events = null)
         {
             var state = initial;
             bool dashing = false;
@@ -733,7 +796,10 @@ public static class PuzzleSolver
                         return state == initial ? null : state;
                     var rotated = Rotate(state, direction, group, path);
                     if (rotated != null && trackGimmicks)
+                    {
                         rotated.UsedGimmicks |= MapGimmick.Rotation;
+                        events?.Add(MapGimmick.Rotation);
+                    }
                     return rotated;
                 }
 
@@ -743,19 +809,29 @@ public static class PuzzleSolver
                 if (state.Ghost > 0)
                 {
                     if (trackGimmicks)
+                    {
                         state.UsedGimmicks |= MapGimmick.Ghost;
+                        // 한 번의 고스트 효과는 첫 이동에서 한 번만 사용 사건으로 기록한다.
+                        if (state.Ghost == TileHelper.GhostCount) events?.Add(MapGimmick.Ghost);
+                    }
                     state.Ghost--;
                 }
                 if (state.Laser)
                 {
                     if (trackGimmicks)
+                    {
                         state.UsedGimmicks |= MapGimmick.Laser;
+                        events?.Add(MapGimmick.Laser);
+                    }
                     FireLaser(state, neighbor, direction);
                     return state;
                 }
 
                 if (dashing && trackGimmicks)
+                {
                     state.UsedGimmicks |= MapGimmick.Dash;
+                    events?.Add(MapGimmick.Dash);
+                }
                 state.Position = neighbor;
                 if (state.Ghost > 0)
                     return state;
@@ -772,7 +848,10 @@ public static class PuzzleSolver
                         }
                         state.Position = exit;
                         if (trackGimmicks)
+                        {
                             state.UsedGimmicks |= MapGimmick.Portal;
+                            events?.Add(MapGimmick.Portal);
+                        }
                         if (trackSequence && state.SequenceProgress == 0)
                             state.SequenceProgress = 1;
                         path?.Push(_positions[exit]);
@@ -789,7 +868,10 @@ public static class PuzzleSolver
                         return state;
                     case TileType.Inv:
                         if (trackGimmicks)
+                        {
                             state.UsedGimmicks |= MapGimmick.Inverter;
+                            events?.Add(MapGimmick.Inverter);
+                        }
                         if (trackSequence && state.SequenceProgress == 1)
                             state.SequenceProgress = 2;
                         Invert(state);
@@ -905,7 +987,7 @@ public static class PuzzleSolver
         private static bool IsPortal(char tile) =>
             tile >= (char)TileType.PortalIn && tile <= (char)TileType.PortalOutPainted;
 
-        private bool CannotFinish(State state)
+        public bool CannotFinish(State state)
         {
             if (_axis >= 0 && _possibleNeighbors == null)
                 return false;

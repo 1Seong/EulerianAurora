@@ -15,10 +15,11 @@ namespace EulerianAurora.Maps
         public MapGimmickCount[] Counts { get; set; } = Array.Empty<MapGimmickCount>();
     }
 
-    // UI는 허용 여부와 난이도만 다룬다. 자동일 때 수동 선택값은 보관만 한다.
+    // 수동으로 선택한 기믹은 각각 한 번 이상 사용한다. 자동일 때 수동 선택값은 보관만 한다.
     public sealed class GenerationUiSettings
     {
         public bool AutomaticGimmicks { get; set; } = true;
+        // 기존 필드명은 유지하지만 수동 모드에서는 허용 범위이자 필수 사용 목록이다.
         public MapGimmick AllowedGimmicks { get; set; } = MapGimmick.All;
         public bool AutomaticDifficulty { get; set; } = true;
         public MapDifficulty Difficulty { get; set; } = MapDifficulty.Medium;
@@ -54,7 +55,8 @@ namespace EulerianAurora.Maps
     {
         // 발견한 충돌을 모두 반환한다. 한쪽 조건으로 다른 쪽 조건을 임의로 덮어쓰지 않는다.
         public static bool TryResolve(GenerationUiSettings settings, GenerationConditions text,
-            out GenerationPlan plan, out string[] conflicts, GenerationBudgetPolicy policy = null, int seed = 0)
+            out GenerationPlan plan, out string[] conflicts, GenerationBudgetPolicy policy = null, int seed = 0,
+            Func<GenerationBudgetPolicy, MapGimmick, int, int, long> estimateReservation = null)
         {
             plan = null;
             var errors = new List<string>();
@@ -74,7 +76,7 @@ namespace EulerianAurora.Maps
             var requestedDifficulty = ui.Difficulty ?? text.Difficulty;
             var allowed = (ui.AllowedGimmicks ?? MapGimmick.All) & (text.AllowedGimmicks ?? MapGimmick.All);
             var order = text.RequiredOrder;
-            var required = MapGimmick.None;
+            var required = ui.AllowedGimmicks ?? MapGimmick.None;
             foreach (var kind in text.RequiredGimmicks.Concat(text.RequiredOrder)) required |= kind;
             if ((required & ~allowed) != 0)
                 errors.Add($"허용하지 않은 기믹이 필수 조건에 있습니다: {required & ~allowed}");
@@ -111,7 +113,10 @@ namespace EulerianAurora.Maps
                 {
                     if (rule.Kind == MapGimmick.None) continue;
                     int minimum = counts.TryGetValue(rule.Kind, out int count) ? count : (required & rule.Kind) != 0 ? 1 : 0;
-                    total += (long)minimum * rule.Cost;
+                    // 생성 전략이 제공한 연결 길 비용과 반복 배치 수까지 자동 난이도 선택에 반영한다.
+                    total += estimateReservation != null
+                        ? estimateReservation(candidateBudget, rule.Kind, minimum, order.Count(kind => kind == rule.Kind))
+                        : (long)minimum * rule.Cost;
                 }
                 return total;
             }

@@ -9,7 +9,7 @@ using UnityEngine.UI;
 
 internal sealed class MapAssistPanel : MonoBehaviour
 {
-    private const string RequestHint = MapTools.RebuildMessage;
+    private const string RequestHint = MapTools.GenerationHint;
     private MapEditor _editor;
     private TMP_FontAsset _font;
     private TMP_Text _buttonLabelStyle;
@@ -277,7 +277,7 @@ internal sealed class MapAssistPanel : MonoBehaviour
     }
     private void BuildOptions(Transform body)
     {
-        var title = CreateLabel(body, "허용 기믹", 20);
+        var title = CreateLabel(body, "사용 기믹", 20);
         Place(title.rectTransform, Vector2.up, 130, 26, 12, -120);
         _autoGimmicks = CreateToggle(body, "기믹 자동", 220, -120, true);
         string[] names = { "포탈", "회전", "고스트", "인버터", "레이저", "대시" };
