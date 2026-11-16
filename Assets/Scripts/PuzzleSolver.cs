@@ -150,6 +150,18 @@ public static class PuzzleSolver
 
         internal char TileAt(Vector3Int cell) => _state.Tiles[(cell.x * _size + cell.y) * _size + cell.z];
         internal bool CannotFinish() => _search.CannotFinish(_state);
+        internal Vector3Int InitialCell(Vector3Int cell) => _search.TransformCell(_state, cell, toInitial: true);
+        internal Vector3Int CurrentCell(Vector3Int cell) => _search.TransformCell(_state, cell, toInitial: false);
+        internal Vector3Int InitialDirection(Vector3Int at, Vector3Int direction) =>
+            _search.TransformCell(_state, at, toInitial: true, direction: direction);
+        internal bool SharePortalOrbit(Vector3Int a, Vector3Int b) => _search.SharePortalOrbit(a, b);
+
+        internal bool SameLayerTurns(Simulation other)
+        {
+            var turns = _state.LayerTurns;
+            return turns == other._state.LayerTurns ||
+                turns != null && other._state.LayerTurns != null && turns.AsSpan().SequenceEqual(other._state.LayerTurns);
+        }
 
         internal bool Reset(char[,,] map, Dictionary<Vector3Int, Vector3Int> portals)
         {
@@ -157,14 +169,17 @@ public static class PuzzleSolver
             _state = null;
             if (map == null || map.GetLength(0) != _size || map.GetLength(1) != _size || map.GetLength(2) != _size)
                 return false;
-            _state = _search.ReadMap(map, portals, out _);
+            _state = _search.ReadMap(map, portals, out _, trackLayerTurns: true);
             return _state != null;
         }
 
-        internal bool TryStep(Vector3Int input)
+        internal bool TryStep(Vector3Int input) => TryStep(input, rotationPreview: false);
+
+        // 완성된 접두 보드에서도 회전 후보의 위치만 미리 보고, 실제 입력은 새 길까지 넣어 검증한다.
+        internal bool TryStep(Vector3Int input, bool rotationPreview)
         {
             int direction = Array.IndexOf(Directions, input);
-            if (_state == null || _state.Unpainted == 0 || direction < 0) return false;
+            if (_state == null || !rotationPreview && _state.Unpainted == 0 || direction < 0) return false;
             int count = _events.Count;
             var next = _search.Advance(_state, direction, trackGimmicks: true, events: _events);
             if (next == null)
@@ -185,6 +200,7 @@ public static class PuzzleSolver
         public int Unpainted;
         public int Ghost;
         public bool Laser;
+        public byte[] LayerTurns;
         public byte SequenceProgress;
         public MapGimmick UsedGimmicks;
 
@@ -200,7 +216,7 @@ public static class PuzzleSolver
             return new State((char[])Tiles.Clone(), Portals)
             {
                 Position = Position, Unpainted = Unpainted, Ghost = Ghost, Laser = Laser,
-                SequenceProgress = SequenceProgress, UsedGimmicks = UsedGimmicks
+                SequenceProgress = SequenceProgress, UsedGimmicks = UsedGimmicks, LayerTurns = LayerTurns
             };
         }
     }
@@ -302,13 +318,14 @@ public static class PuzzleSolver
         private int Index(Vector3Int p) => (p.x * _size + p.y) * _size + p.z;
 
         public State ReadMap(char[,,] map, Dictionary<Vector3Int, Vector3Int> portalPairs,
-            out string error)
+            out string error, bool trackLayerTurns = false)
         {
             var tiles = new char[_positions.Length];
             var portals = portalPairs != null && portalPairs.Count != 0 ? new int[tiles.Length] : null;
             if (portals != null)
                 Array.Fill(portals, -1);
             var state = new State(tiles, portals) { Position = -1 };
+            if (trackLayerTurns && _axis >= 0) state.LayerTurns = new byte[_size];
             for (int cell = 0; cell < tiles.Length; cell++)
             {
                 var p = _positions[cell];
@@ -968,13 +985,39 @@ public static class PuzzleSolver
             }
 
             var rotatedPosition = RotatePosition(position, clockwise, _last);
+            byte[] turns = null;
+            if (prior.LayerTurns != null)
+            {
+                turns = (byte[])prior.LayerTurns.Clone();
+                foreach (int layer in group) turns[layer] = (byte)((turns[layer] + (clockwise ? 1 : 3)) & 3);
+            }
             path?.Push(rotatedPosition);
             return new State(tiles, portals)
             {
                 Position = Index(rotatedPosition), Unpainted = prior.Unpainted,
                 Ghost = prior.Ghost, Laser = prior.Laser,
-                UsedGimmicks = prior.UsedGimmicks, SequenceProgress = prior.SequenceProgress
+                UsedGimmicks = prior.UsedGimmicks, SequenceProgress = prior.SequenceProgress, LayerTurns = turns
             };
+        }
+
+        // 레이어 번호는 유지되고, 그 평면의 좌표와 방향만 같은 각도로 이동한다.
+        public Vector3Int TransformCell(State state, Vector3Int at, bool toInitial, Vector3Int? direction = null)
+        {
+            var value = direction ?? at;
+            if (state.LayerTurns == null) return value;
+            int turns = state.LayerTurns[at[_axis]];
+            if (turns == 3) return RotatePosition(value, toInitial, direction.HasValue ? 0 : _last);
+            for (int i = 0; i < turns; i++)
+                value = RotatePosition(value, !toInitial, direction.HasValue ? 0 : _last);
+            return value;
+        }
+
+        public bool SharePortalOrbit(Vector3Int a, Vector3Int b)
+        {
+            if (_axis < 0 || a[_axis] != b[_axis] || _rotationGroups[a[_axis]] == null) return false;
+            for (int i = 0; i < 4; i++, a = RotatePosition(a, true, _last))
+                if (a == b) return true;
+            return false;
         }
 
         private Vector3Int RotatePosition(Vector3Int p, bool clockwise, int last) => _axis switch

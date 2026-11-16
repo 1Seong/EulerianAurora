@@ -9,7 +9,8 @@ namespace EulerianAurora.Maps
         InverterActivated,
         DashUsed,
         LaserFired,
-        GhostUsed
+        GhostUsed,
+        RotationUsed
     }
 
     public enum MapAssistOperation

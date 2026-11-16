@@ -56,7 +56,8 @@ namespace EulerianAurora.Maps
         // 발견한 충돌을 모두 반환한다. 한쪽 조건으로 다른 쪽 조건을 임의로 덮어쓰지 않는다.
         public static bool TryResolve(GenerationUiSettings settings, GenerationConditions text,
             out GenerationPlan plan, out string[] conflicts, GenerationBudgetPolicy policy = null, int seed = 0,
-            Func<GenerationBudgetPolicy, MapGimmick, int, int, long> estimateReservation = null)
+            Func<GenerationBudgetPolicy, MapGimmick, int, int, long> estimateReservation = null,
+            MapGenerationOptions? options = null)
         {
             plan = null;
             var errors = new List<string>();
@@ -90,21 +91,38 @@ namespace EulerianAurora.Maps
                     errors.Add($"필수 기믹 {entry.Kind}의 개수가 0입니다.");
             }
             // 자동 난이도는 보통으로 고정하지 않는다. 최소 배치 비용을 감당하는 단계만 추첨한다.
-            var choices = new List<MapDifficulty>();
+            var tuning = options ?? MapGenerationOptions.Default;
+            if (options.HasValue && tuning.ValidationError() is string tuningError)
+            {
+                conflicts = new[] { tuningError };
+                return false;
+            }
+            var choices = new List<(MapDifficulty Difficulty, GenerationBudgetPolicy Budget, int Weight, long Reserved)>();
+            int weightTotal = 0;
             foreach (var level in new[] { MapDifficulty.Easy, MapDifficulty.Medium, MapDifficulty.Hard })
             {
                 if (requestedDifficulty.HasValue && requestedDifficulty.Value != level) continue;
-                var candidateBudget = policy ?? GenerationBudgetPolicy.ForDifficulty(level);
-                if (Reserve(candidateBudget) <= candidateBudget.Maximum) choices.Add(level);
+                var profile = tuning.For(level);
+                var candidateBudget = policy ?? profile.CreateBudget(tuning.Costs);
+                long reserved = Reserve(candidateBudget);
+                int weight = requestedDifficulty.HasValue ? 1 : profile.AutomaticDifficultyWeight;
+                if (weight <= 0 || reserved > candidateBudget.Maximum) continue;
+                choices.Add((level, candidateBudget, weight, reserved));
+                weightTotal += weight;
             }
-            if (choices.Count == 0) errors.Add("요청 기믹의 최소 비용이 선택 가능한 난이도의 예산을 초과합니다.");
-            var difficulty = choices.Count > 0 ? choices[new Random(seed).Next(choices.Count)] : MapDifficulty.Medium;
-            var budget = policy ?? GenerationBudgetPolicy.ForDifficulty(difficulty);
-            long reserved = Reserve(budget);
+            if (choices.Count == 0) errors.Add("난이도 선택 가중치와 요청 기믹의 최소 예산을 확인하세요.");
             conflicts = errors.Distinct().ToArray();
             if (conflicts.Length != 0) return false;
-            plan = new GenerationPlan(difficulty, allowed, required, order, counts, budget, (int)reserved, !requestedDifficulty.HasValue);
-            return true;
+            int draw = new Random(seed).Next(weightTotal);
+            foreach (var choice in choices)
+            {
+                draw -= choice.Weight;
+                if (draw >= 0) continue;
+                plan = new GenerationPlan(choice.Difficulty, allowed, required, order, counts, choice.Budget,
+                    (int)choice.Reserved, !requestedDifficulty.HasValue);
+                return true;
+            }
+            throw new InvalidOperationException("자동 난이도 추첨에 실패했습니다.");
 
             long Reserve(GenerationBudgetPolicy candidateBudget)
             {

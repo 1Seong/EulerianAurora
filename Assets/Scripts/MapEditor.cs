@@ -273,7 +273,8 @@ public class MapEditor : MonoBehaviour
             return Task.FromResult(new MapGenerationResult(MapGenerationStatus.UnsupportedConditions, null,
                 "이 에디터에서는 현재 보드와 같은 크기의 맵을 만들 수 있어요."));
         var map = MapDocument.FromBoard(_map, _portalPairDict, _rotAxis, _canRotate);
-        return Task.Run(() => MapTools.Generate(map, request, seed, token: token), token);
+        var options = MapGenerationSettings.ReadOptions();
+        return Task.Run(() => MapTools.Generate(map, request, seed, token: token, options: options), token);
     }
 
     internal void RenderAssistPreview(MapCandidate proposal)

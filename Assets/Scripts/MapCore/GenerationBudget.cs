@@ -45,13 +45,8 @@ namespace EulerianAurora.Maps
         // 조정용 초기값이며 실제 플레이 난이도를 측정한 값은 아니다. 비용과 선택 확률은 별도로 설정한다.
         public static GenerationBudgetPolicy ForDifficulty(MapDifficulty difficulty)
         {
-            if (difficulty is not (MapDifficulty.Easy or MapDifficulty.Medium or MapDifficulty.Hard))
-                throw new ArgumentOutOfRangeException(nameof(difficulty));
-            int heavy = difficulty == MapDifficulty.Hard ? 6 : difficulty == MapDifficulty.Medium ? 3 : 1;
-            return new GenerationBudgetPolicy(difficulty == MapDifficulty.Hard ? 80 : difficulty == MapDifficulty.Medium ? 45 : 24,
-                new(MapGimmick.None, 1, 12), new(MapGimmick.Dash, 2, 5), new(MapGimmick.Portal, 3, 5),
-                new(MapGimmick.Laser, 4, 3), new(MapGimmick.Ghost, 5, heavy),
-                new(MapGimmick.Rotation, 8, heavy), new(MapGimmick.Inverter, 10, heavy));
+            var defaults = MapGenerationOptions.Default;
+            return defaults.For(difficulty).CreateBudget(defaults.Costs);
         }
 
         // 가중 추첨 전에 남은 예산으로 선택할 수 있는 후보만 남긴다.

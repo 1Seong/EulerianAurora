@@ -1,11 +1,13 @@
 $ErrorActionPreference = 'Stop'
 $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $testRoot = Join-Path $projectRoot 'Temp/MapGenerationTests'
-New-Item -ItemType Directory -Force "$testRoot/Assets/Editor", "$testRoot/Assets/MapCore", "$testRoot/Packages", "$testRoot/ProjectSettings" | Out-Null
+New-Item -ItemType Directory -Force "$testRoot/Assets/Editor", "$testRoot/Assets/MapCore", "$testRoot/Assets/Resources", "$testRoot/Packages", "$testRoot/ProjectSettings" | Out-Null
 foreach ($name in @('PuzzleSolver','StringHelper','MapGimmick','MapDocument','MapAssistBridge','MapAssistContracts')) {
     Copy-Item -LiteralPath "$projectRoot/Assets/Scripts/$name.cs" -Destination "$testRoot/Assets/$name.cs"
 }
 Copy-Item "$projectRoot/Assets/Scripts/MapCore/*.cs" "$testRoot/Assets/MapCore"
+Copy-Item "$projectRoot/Assets/Scripts/MapCore/MapGenerationSettings.cs.meta" "$testRoot/Assets/MapCore"
+Copy-Item "$projectRoot/Assets/Resources/MapGenerationSettings.asset*" "$testRoot/Assets/Resources"
 # 게임의 타일 규칙을 원본에서 추출한다. 테스트용 규칙 구현을 별도로 유지하지 않는다.
 $playerSource = Get-Content -Raw "$projectRoot/Assets/Scripts/PuzzlePlayer.cs"
 $begin = $playerSource.IndexOf('#region TileHelpers')
@@ -20,6 +22,7 @@ Copy-Item "$projectRoot/ProjectSettings/ProjectVersion.txt" "$testRoot/ProjectSe
 $jsonPackage = Get-ChildItem "$projectRoot/Library/PackageCache" -Directory -Filter 'com.unity.nuget.newtonsoft-json@*' | Select-Object -First 1
 if (!$jsonPackage) { throw '프로젝트를 Unity에서 열어 Newtonsoft JSON 패키지를 먼저 복원해 주세요.' }
 $manifest = @{ dependencies = @{
+    'com.unity.modules.imgui' = '1.0.0'
     'com.unity.modules.jsonserialize' = '1.0.0'
     'com.unity.nuget.newtonsoft-json' = 'file:' + $jsonPackage.FullName.Replace('\','/')
 } }

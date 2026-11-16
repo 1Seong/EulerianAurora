@@ -1,0 +1,104 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 112ac4e94a6b4990a2b5e20a1bcefd79, type: 3}
+  m_Name: MapGenerationSettings
+  m_EditorClassIdentifier:
+  options:
+    Costs:
+      Road: 1
+      Dash: 2
+      Portal: 3
+      Laser: 4
+      Ghost: 5
+      Rotation: 8
+      Inverter: 10
+    Easy:
+      MaximumBudget: 24
+      AutomaticDifficultyWeight: 1
+      PlacementWeights:
+        Road: 12
+        Dash: 5
+        Portal: 5
+        Laser: 3
+        Ghost: 1
+        Rotation: 1
+        Inverter: 1
+      TargetBudgetMinPercent: 50
+      TargetBudgetMaxPercent: 100
+      SurfaceFillMaxPercent: 75
+      RotationGroupMinLength: 1
+      RotationGroupMaxLength: 2
+      OptionalRotationPercent: 10
+      SecondRotationGroupPercent: 0
+      StartInsideRotationGroup: 0
+    Medium:
+      MaximumBudget: 45
+      AutomaticDifficultyWeight: 1
+      PlacementWeights:
+        Road: 12
+        Dash: 5
+        Portal: 5
+        Laser: 3
+        Ghost: 3
+        Rotation: 3
+        Inverter: 3
+      TargetBudgetMinPercent: 50
+      TargetBudgetMaxPercent: 100
+      SurfaceFillMaxPercent: 75
+      RotationGroupMinLength: 1
+      RotationGroupMaxLength: 4
+      OptionalRotationPercent: 20
+      SecondRotationGroupPercent: 25
+      StartInsideRotationGroup: 0
+    Hard:
+      MaximumBudget: 80
+      AutomaticDifficultyWeight: 1
+      PlacementWeights:
+        Road: 12
+        Dash: 5
+        Portal: 5
+        Laser: 3
+        Ghost: 6
+        Rotation: 6
+        Inverter: 6
+      TargetBudgetMinPercent: 50
+      TargetBudgetMaxPercent: 100
+      SurfaceFillMaxPercent: 75
+      RotationGroupMinLength: 2
+      RotationGroupMaxLength: 6
+      OptionalRotationPercent: 35
+      SecondRotationGroupPercent: 50
+      StartInsideRotationGroup: 1
+    Search:
+      PlacementAttempts: 1500
+      Restarts: 8
+      Milliseconds: 2500
+      InputLimit: 512
+      PortalExitSamplesPerEntrance: 8
+      GhostPathsPerEntrance: 8
+      GhostStatesPerEntrance: 128
+    Sampling:
+      MinimumSize: 2
+      MaximumSize: 32
+      DefaultSize: 10
+      MinimumLaserRayLength: 1
+      MaximumLaserRayLength: 3
+      PreferredInverterRayLength: 2
+      MaximumConsecutiveTurns: 3
+      OneTurnWeight: 1
+      TwoTurnWeight: 1
+      ThreeTurnWeight: 1
+      XAxisWeight: 1
+      YAxisWeight: 1
+      ZAxisWeight: 1
+      SecondRotationGroupLength: 2
+      RotationGroupGap: 1

@@ -29,6 +29,7 @@ public static class NewMapGeneratorSmoke
         try
         {
             var total = Stopwatch.StartNew();
+            CheckLiveGenerationSettings();
             // 수동 UI는 선택한 기믹 모두의 실제 사용을 요구한다. 배열로 필수 조건을 따로 주지 않는다.
             var supported = MapGimmick.Portal | MapGimmick.Dash | MapGimmick.Laser | MapGimmick.Ghost;
             foreach (var selection in new[] { MapGimmick.None, MapGimmick.Portal, MapGimmick.Dash, MapGimmick.Laser, MapGimmick.Ghost, supported })
@@ -49,9 +50,7 @@ public static class NewMapGeneratorSmoke
             Check(MapTools.Generate(null, selectedZero, 1).Status == MapGenerationStatus.UnsupportedConditions, "UI selected versus zero count");
             selectedZero.UiConditions.AutomaticGimmicks = true;
             Check(MapTools.Generate(null, selectedZero, 1).Candidate != null, "automatic ignores stored selected kind");
-            var unsupportedSelection = Request(10, MapDifficulty.Hard);
-            unsupportedSelection.UiConditions.AllowedGimmicks = MapGimmick.Rotation;
-            Check(MapTools.Generate(null, unsupportedSelection, 1).Status == MapGenerationStatus.UnsupportedConditions, "unsupported selection not silently dropped");
+            CheckRotationGeneration();
             long maxMs = 0;
             int generated = 0, backtracks = 0;
             var boards = new HashSet<string>();
@@ -303,19 +302,22 @@ public static class NewMapGeneratorSmoke
                 Check(candidate.Map.Tiles.Count(c => c == (char)TileType.Ghost) == amount, "exact ghost count");
                 Check(MapTools.Verify(candidate.Map, candidate.Witness.SolutionInputs).IsSolvable, "ghost final replay");
                 Check((candidate.Witness.UsedGimmicks & MapGimmick.Ghost) != 0, "ghost actually used");
+                var sim = new PuzzleSolver.Simulation(size, candidate.Map.RotationAxis, candidate.Map.RotatingLayers);
                 int expectedCost = candidate.Map.Tiles.Count(c => c == (char)TileType.Road) +
                     candidate.Map.Tiles.Count(c => TileHelper.IsDash(c)) * 2 + candidate.Map.PortalPairs.Length * 3 +
                     candidate.Map.Tiles.Count(c => c == (char)TileType.Laser) * 4 + amount * 5 +
                     candidate.Map.Tiles.Count(c => c == (char)TileType.Inv) * 10;
-                Check(candidate.GenerationCost == expectedCost, "ghost cost and reused cells");
-                var sim = new PuzzleSolver.Simulation(size);
                 Check(sim.Reset(candidate.Map.CopyTiles(), candidate.Map.CopyPortalLinks()), "ghost reset");
-                int activeMoves = 0, revisits = 0;
+                int activeMoves = 0, revisits = 0, rotationPlacements = 0;
+                bool rotatedLast = false;
                 var visited = new HashSet<Vector3Int> { sim.Position };
                 foreach (var input in candidate.Witness.SolutionInputs)
                 {
-                    int ghost = sim.GhostRemaining, unpainted = sim.Unpainted;
+                    int ghost = sim.GhostRemaining, unpainted = sim.Unpainted, eventCount = sim.Events.Count;
                     Check(sim.TryStep(input), "ghost step");
+                    bool rotated = sim.Events.Skip(eventCount).Contains(MapGimmick.Rotation);
+                    if (rotated && !rotatedLast) rotationPlacements++;
+                    rotatedLast = rotated;
                     if (ghost > 0)
                     {
                         activeMoves++;
@@ -327,6 +329,8 @@ public static class NewMapGeneratorSmoke
                 }
                 Check(activeMoves == amount * TileHelper.GhostCount && revisits >= amount, "bounded painted-cell backtracking");
                 Check(sim.Events.Count(e => e == MapGimmick.Ghost) == amount, "one ghost event per activation");
+                Check(candidate.GenerationCost == expectedCost + 8 * rotationPlacements,
+                    "ghost cost and reused cells");
                 Check(sim.GhostRemaining == 0 && sim.Unpainted == 0, "ghost ended before clear");
                 ghostMaps++;
             }
@@ -341,7 +345,7 @@ public static class NewMapGeneratorSmoke
                 request.UiConditions = null;
                 request.RequiredOrder = order;
                 MapGimmick Kind(MapAssistEvent e) => e == MapAssistEvent.GhostUsed ? MapGimmick.Ghost : EventKind(e);
-                request.GimmickCounts = new[] { MapGimmick.Ghost, MapGimmick.Portal, MapGimmick.Laser, MapGimmick.Dash, MapGimmick.Inverter }
+                request.GimmickCounts = new[] { MapGimmick.Ghost, MapGimmick.Portal, MapGimmick.Laser, MapGimmick.Dash, MapGimmick.Inverter, MapGimmick.Rotation }
                     .Select(k => new MapGimmickCount { Kind = k, Count = order.Count(e => Kind(e) == k) }).ToArray();
                 var result = MapTools.Generate(null, request, seed);
                 Check(result.Candidate != null, "ghost ordered generation: " + result.Message);
@@ -454,6 +458,270 @@ public static class NewMapGeneratorSmoke
             EditorApplication.Exit(0);
         }
         catch (Exception error) { Debug.LogException(error); EditorApplication.Exit(1); }
+    }
+
+    private static void CheckLiveGenerationSettings()
+    {
+        var asset = Resources.Load<MapGenerationSettings>("MapGenerationSettings");
+        Check(asset != null, "맵 생성 설정 에셋 로드");
+        var inspector = Editor.CreateEditor(asset);
+        Check(inspector != null && inspector.GetType().Name == "SettingsInspector", "맵 생성 설정 인스펙터 등록");
+        UnityEngine.Object.DestroyImmediate(inspector);
+        string previous = EditorJsonUtility.ToJson(asset);
+        var defaults = ScriptableObject.CreateInstance<MapGenerationSettings>();
+        try
+        {
+            EditorUtility.CopySerialized(defaults, asset);
+            var before = MapGenerationSettings.ReadOptions();
+            var properties = new SerializedObject(asset);
+            var root = properties.FindProperty("options");
+            var easy = root.FindPropertyRelative(nameof(MapGenerationOptions.Easy));
+            var sampling = root.FindPropertyRelative(nameof(MapGenerationOptions.Sampling));
+            root.FindPropertyRelative("Costs.Road").intValue = 3;
+            easy.FindPropertyRelative(nameof(GenerationDifficultyOptions.MaximumBudget)).intValue = 12;
+            easy.FindPropertyRelative(nameof(GenerationDifficultyOptions.TargetBudgetMinPercent)).intValue = 100;
+            sampling.FindPropertyRelative(nameof(GenerationSamplingOptions.DefaultSize)).intValue = 12;
+            properties.ApplyModifiedPropertiesWithoutUndo();
+            var after = MapGenerationSettings.ReadOptions();
+            var request = Request(12, MapDifficulty.Easy, 0);
+            request.Size = null;
+            request.UiConditions.AllowedGimmicks = MapGimmick.None;
+            var changed = MapTools.Generate(null, request, 1, options: after);
+            Check(before.Costs.Road == 1 && before.Sampling.DefaultSize == 10 &&
+                changed.Candidate?.Map.Size == 12 && changed.Plan.Budget.Maximum == 12 &&
+                changed.Candidate.GenerationCost == 12 &&
+                changed.Candidate.Map.Tiles.Count(t => t == (char)TileType.Road) == 4, "인스펙터 수정과 생성 설정 스냅샷");
+
+            root.FindPropertyRelative("Search.PlacementAttempts").intValue = 1;
+            properties.ApplyModifiedPropertiesWithoutUndo();
+            var limited = MapTools.Generate(null, request, 1, options: MapGenerationSettings.ReadOptions());
+            Check(limited.Status == MapGenerationStatus.SearchLimitReached, "다음 생성에서 수정한 시도 한도 적용");
+
+            var tuning = before;
+            tuning.Easy.AutomaticDifficultyWeight = 0;
+            tuning.Medium.AutomaticDifficultyWeight = 0;
+            request.Difficulty = MapDifficulty.Any;
+            var automatic = MapTools.Generate(null, request, 2, options: tuning);
+            Check(automatic.Candidate != null && automatic.Plan.Difficulty == MapDifficulty.Hard, "자동 난이도 가중치 적용");
+
+            tuning = before;
+            tuning.Sampling.MinimumLaserRayLength = 2;
+            tuning.Sampling.MaximumLaserRayLength = 2;
+            tuning.Costs.Laser = 7;
+            request.Difficulty = MapDifficulty.Easy;
+            request.UiConditions.AllowedGimmicks = MapGimmick.Laser;
+            var laser = MapTools.Generate(null, request, 0, options: tuning);
+            Check(laser.Candidate != null && laser.Plan.ReservedBudget == 10 &&
+                laser.Plan.Budget.Cost(MapGimmick.Laser) == 7, "레이저 사거리와 비용을 예약에 적용");
+            tuning.Search.InputLimit = 0;
+            Check(MapTools.Generate(null, request, 0, options: tuning).Status == MapGenerationStatus.UnsupportedConditions,
+                "잘못된 인스펙터 설정 거절");
+        }
+        finally
+        {
+            EditorJsonUtility.FromJsonOverwrite(previous, asset);
+            UnityEngine.Object.DestroyImmediate(defaults);
+        }
+    }
+
+    private static void CheckRotationGeneration()
+    {
+        // 두 묶음 사이의 고정 레이어에서 전파가 끝나며, 양쪽의 이웃 레이어는 함께 돈다.
+        const int size = 8;
+        var layers = new[] { false, true, true, true, false, true, true, false };
+        var board = new char[size, size, size];
+        for (int x = 0; x < size; x++)
+        for (int y = 0; y < size; y++)
+        for (int z = 0; z < size; z++) board[x, y, z] = (char)TileType.Empty;
+        board[2, 0, 2] = (char)TileType.Player;
+        board[1, 0, 3] = (char)TileType.DashZm;
+        board[2, 0, 4] = (char)TileType.Road;
+        board[3, 0, 3] = (char)TileType.Road;
+        board[4, 0, 3] = (char)TileType.Road;
+        board[5, 0, 3] = (char)TileType.Road;
+        var spin = new Vector3Int(0, 0, -1);
+        var cursor = new PuzzleSolver.Simulation(size, 1, layers);
+        Check(cursor.Reset(board, null) && cursor.TryStep(spin), "연속 레이어 회전");
+        Check(cursor.Events.SequenceEqual(new[] { MapGimmick.Rotation }) &&
+            cursor.Position == new Vector3Int(2, 5, 0), "연속 묶음 회전은 입력 한 회");
+        Check(cursor.TileAt(new Vector3Int(1, 4, 0)) == (char)TileType.DashYp &&
+            cursor.TileAt(new Vector3Int(2, 3, 0)) == (char)TileType.Road &&
+            cursor.TileAt(new Vector3Int(3, 4, 0)) == (char)TileType.Road, "양쪽 인접 레이어와 대시 방향도 함께 이동");
+        Check(cursor.TileAt(new Vector3Int(4, 0, 3)) == (char)TileType.Road &&
+            cursor.TileAt(new Vector3Int(5, 0, 3)) == (char)TileType.Road, "고정 레이어와 별도 묶음은 원래 좌표");
+        var original = new Vector3Int(1, 0, 3);
+        var rotated = new Vector3Int(1, 4, 0);
+        Check(cursor.InitialCell(rotated) == original && cursor.CurrentCell(original) == rotated &&
+            cursor.InitialDirection(rotated, Vector3Int.up) == spin, "회전 레이어의 초기 위치와 방향 복원");
+
+        var noLayer = Request(2, MapDifficulty.Easy);
+        noLayer.UiConditions.AllowedGimmicks = MapGimmick.Rotation;
+        Check(MapTools.Generate(null, noLayer, 0).Status == MapGenerationStatus.NoCandidateFound, "내부 레이어 없는 보드");
+        var axes = new HashSet<int>();
+        bool hasChoice = false;
+        foreach (int cubeSize in new[] { 3, 10, 32 })
+        for (int seed = 0; seed < 8; seed++)
+        {
+            int turns = seed % 2 == 0 ? 1 : 2 + seed % 4 / 2;
+            var request = Request(cubeSize, MapDifficulty.Medium);
+            request.UiConditions.AllowedGimmicks = MapGimmick.Rotation;
+            request.RequiredOrder = Enumerable.Repeat(MapAssistEvent.RotationUsed, turns).ToArray();
+            request.GimmickCounts = new[] { new MapGimmickCount { Kind = MapGimmick.Rotation, Count = turns } };
+            var result = MapTools.Generate(null, request, seed);
+            Check(result.Candidate != null, $"회전 생성 {cubeSize}/{seed}: {result.Message}");
+            var candidate = result.Candidate;
+            var map = candidate.Map;
+            var inputs = candidate.Witness.SolutionInputs;
+            axes.Add(map.RotationAxis);
+            Check(map.RotationAxis is >= 1 and <= 3 && !map.RotatingLayers[0] && !map.RotatingLayers[cubeSize - 1],
+                "유효한 회전 축과 내부 레이어");
+            Check(result.Plan.ReservedBudget == 9 &&
+                candidate.GenerationCost == 8 + map.Tiles.Count(tile => tile == (char)TileType.Road),
+                "한 자리에서 연속 회전 1~3회와 연결 길 예산");
+            Check(MapTools.Verify(map, inputs).IsSolvable, "회전 맵 완전 재생");
+            var sim = new PuzzleSolver.Simulation(cubeSize, map.RotationAxis, map.RotatingLayers);
+            sim.Reset(map.CopyTiles(), map.CopyPortalLinks());
+            var rotationIndices = new List<int>();
+            var triggeredLayers = new HashSet<int>();
+            for (int i = 0; i < inputs.Count; i++)
+            {
+                int prior = sim.Events.Count;
+                int layer = sim.Position[map.RotationAxis - 1];
+                Check(sim.TryStep(inputs[i]), "회전 맵 입력");
+                if (sim.Events.Count > prior)
+                {
+                    Check(sim.Position[map.RotationAxis - 1] == layer, "연속 회전의 레이어 유지");
+                    rotationIndices.Add(i);
+                    triggeredLayers.Add(layer);
+                }
+            }
+            Check(sim.Events.Count == turns && sim.Events.All(e => e == MapGimmick.Rotation), "해답의 정확한 회전 횟수");
+            Check(rotationIndices.Last() - rotationIndices[0] == turns - 1, "같은 레이어에서 연속 회전");
+            CheckActiveRotationLayers(map, triggeredLayers);
+            if (cubeSize == 10 && turns == 1)
+            {
+                int turn = rotationIndices[0];
+                if (turn > 0 && inputs[turn - 1][map.RotationAxis - 1] != 0)
+                {
+                    // 같은 묶음에서 축을 따라 움직이기 전에도 동일한 회전으로 클리어할 수 있다.
+                    var earlier = inputs.ToArray();
+                    (earlier[turn - 1], earlier[turn]) = (earlier[turn], earlier[turn - 1]);
+                    var alternate = MapTools.Verify(map, earlier);
+                    hasChoice |= alternate.IsSolvable && alternate.UsedGimmicks == MapGimmick.Rotation;
+                }
+            }
+        }
+        Check(axes.Count == 3, "세 축에서 회전 생성");
+        Check(hasChoice, "생성 맵에서 인접 레이어 중 회전 시작점 선택");
+
+        var separated = Request(10, MapDifficulty.Medium);
+        separated.UiConditions.AllowedGimmicks = MapGimmick.Rotation | MapGimmick.Dash;
+        separated.RequiredOrder = new[] { MapAssistEvent.RotationUsed, MapAssistEvent.DashUsed, MapAssistEvent.RotationUsed };
+        separated.GimmickCounts = new[] {
+            new MapGimmickCount { Kind = MapGimmick.Rotation, Count = 2 },
+            new MapGimmickCount { Kind = MapGimmick.Dash, Count = 1 }
+        };
+        var separateResult = MapTools.Generate(null, separated, 1);
+        Check(separateResult.Candidate != null && separateResult.Plan.ReservedBudget == 21, "이동으로 나뉜 두 회전의 예약");
+        var separateMap = separateResult.Candidate.Map;
+        Check(separateResult.Candidate.GenerationCost == 18 + separateMap.Tiles.Count(tile => tile == (char)TileType.Road),
+            "이동으로 나뉜 두 회전은 각각 비용 부과");
+        Check(MapTools.Verify(separateMap, separateResult.Candidate.Witness.SolutionInputs).IsSolvable, "나뉜 회전 재생");
+
+        var spans = new int[3];
+        var firstSequenceCounts = new int[3, 4];
+        var difficulties = new[] { MapDifficulty.Easy, MapDifficulty.Medium, MapDifficulty.Hard };
+        for (int level = 0; level < difficulties.Length; level++)
+        for (int seed = 0; seed < 20; seed++)
+        {
+            var request = Request(10, difficulties[level]);
+            request.UiConditions.AllowedGimmicks = MapGimmick.Rotation;
+            var result = MapTools.Generate(null, request, seed);
+            Check(result.Candidate != null, $"난이도별 회전 생성 {level}/{seed}: {result.Message}");
+            var map = result.Candidate.Map;
+            var sim = new PuzzleSolver.Simulation(map.Size, map.RotationAxis, map.RotatingLayers);
+            Check(sim.Reset(map.CopyTiles(), map.CopyPortalLinks()), "정리된 회전 맵 초기화");
+            var triggers = new HashSet<int>();
+            int firstSequence = 0;
+            bool firstFinished = false;
+            foreach (var input in result.Candidate.Witness.SolutionInputs)
+            {
+                int layer = sim.Position[map.RotationAxis - 1], previous = sim.Events.Count;
+                Check(sim.TryStep(input), "정리된 레이어로 해답 재생");
+                if (sim.Events.Count > previous)
+                {
+                    triggers.Add(layer);
+                    if (!firstFinished) firstSequence++;
+                }
+                else if (firstSequence > 0) firstFinished = true;
+            }
+            CheckActiveRotationLayers(map, triggers);
+            spans[level] += map.RotatingLayers.Count(enabled => enabled);
+            Check(firstSequence is >= 1 and <= 3, "첫 연속 회전 횟수");
+            firstSequenceCounts[level, firstSequence]++;
+        }
+        Check(spans[2] > spans[0], "어려움의 유효 회전 레이어가 쉬움보다 많음");
+        for (int level = 0; level < difficulties.Length; level++)
+        {
+            Check(firstSequenceCounts[level, 1] > 0 && firstSequenceCounts[level, 2] > 0 && firstSequenceCounts[level, 3] > 0,
+                $"모든 연속 회전 횟수 생성 {difficulties[level]}");
+            Debug.Log($"ROTATION_DIFFICULTY_PASS level={difficulties[level]} activeLayers={spans[level]} " +
+                $"firstTurns={firstSequenceCounts[level, 1]},{firstSequenceCounts[level, 2]},{firstSequenceCounts[level, 3]}");
+        }
+
+        foreach (var kind in new[] { MapGimmick.Portal, MapGimmick.Dash, MapGimmick.Laser, MapGimmick.Ghost, MapGimmick.Inverter })
+        {
+            var request = Request(10, MapDifficulty.Medium);
+            request.UiConditions.AllowedGimmicks = MapGimmick.Rotation | kind;
+            request.GimmickCounts = new[] { new MapGimmickCount { Kind = MapGimmick.Rotation, Count = 1 } };
+            var result = MapTools.Generate(null, request, 2);
+            Check(result.Candidate != null && result.Candidate.Witness.UsedGimmicks == request.UiConditions.AllowedGimmicks &&
+                MapTools.Verify(result.Candidate.Map, result.Candidate.Witness.SolutionInputs).IsSolvable, $"회전과 {kind} 혼합");
+        }
+
+        foreach (bool rotateFirst in new[] { true, false })
+        foreach (int cubeSize in new[] { 10, 32 })
+        {
+            var request = Request(cubeSize, MapDifficulty.Medium);
+            request.UiConditions.AllowedGimmicks = MapGimmick.Rotation | MapGimmick.Inverter;
+            var order = rotateFirst
+                ? new[] { MapAssistEvent.RotationUsed, MapAssistEvent.InverterActivated }
+                : new[] { MapAssistEvent.InverterActivated, MapAssistEvent.RotationUsed };
+            request.RequiredOrder = order;
+            request.GimmickCounts = new[] {
+                new MapGimmickCount { Kind = MapGimmick.Rotation, Count = 1 },
+                new MapGimmickCount { Kind = MapGimmick.Inverter, Count = 1 }
+            };
+            var result = MapTools.Generate(null, request, 0);
+            Check(result.Candidate != null, $"회전·인버터 요청 순서 {cubeSize}/{rotateFirst}: {result.Message}");
+            var map = result.Candidate.Map;
+            var sim = new PuzzleSolver.Simulation(cubeSize, map.RotationAxis, map.RotatingLayers);
+            Check(sim.Reset(map.CopyTiles(), map.CopyPortalLinks()), "회전·인버터 초기화");
+            foreach (var input in result.Candidate.Witness.SolutionInputs)
+                Check(sim.TryStep(input), "회전·인버터 재생");
+            Check(sim.Unpainted == 0 &&
+                sim.Events.SequenceEqual(order.Select(e => e == MapAssistEvent.RotationUsed ? MapGimmick.Rotation : MapGimmick.Inverter)),
+                "회전과 인버터를 요청한 순서로 발동");
+        }
+    }
+
+    private static void CheckActiveRotationLayers(MapDocument map, HashSet<int> triggered)
+    {
+        var occupied = new bool[map.Size];
+        for (int i = 0; i < map.Tiles.Length; i++)
+        {
+            if (map.Tiles[i] == (char)TileType.Empty) continue;
+            int layer = map.RotationAxis switch { 1 => i / (map.Size * map.Size), 2 => i / map.Size % map.Size, _ => i % map.Size };
+            occupied[layer] = true;
+        }
+        for (int layer = 1; layer < map.Size - 1;)
+        {
+            if (!map.RotatingLayers[layer]) { layer++; continue; }
+            int first = layer;
+            while (map.RotatingLayers[layer]) layer++;
+            Check(occupied[first] && occupied[layer - 1], "묶음 양 끝의 빈 레이어 정리");
+            Check(triggered.Any(turn => turn >= first && turn < layer), "해답에서 회전한 묶음만 유지");
+        }
     }
 
     private static void CheckInverterGeneration()
