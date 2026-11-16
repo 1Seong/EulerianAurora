@@ -175,6 +175,20 @@ public static class PuzzleSolver
 
         internal bool TryStep(Vector3Int input) => TryStep(input, rotationPreview: false);
 
+        // 일반 길 전용 생성에서는 새 칸이 앞선 입력의 결과를 바꾸지 않는다.
+        internal bool TryAppendRoad(Vector3Int input)
+        {
+            var cell = Position + input;
+            if (Unpainted != 0 || !cell.IsOnSurface(_size) || TileAt(cell) != (char)TileType.Empty) return false;
+            var previous = _state;
+            _state = previous.Copy();
+            _state.Tiles[(cell.x * _size + cell.y) * _size + cell.z] = (char)TileType.Road;
+            _state.Unpainted = 1;
+            if (TryStep(input)) return true;
+            _state = previous;
+            return false;
+        }
+
         // 완성된 접두 보드에서도 회전 후보의 위치만 미리 보고, 실제 입력은 새 길까지 넣어 검증한다.
         internal bool TryStep(Vector3Int input, bool rotationPreview)
         {

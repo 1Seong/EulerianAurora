@@ -15,7 +15,7 @@ namespace EulerianAurora.Maps
         internal const int MinimumCubeSize = 2;
         internal const int MaximumCubeSize = 32;
         internal const int MaximumValue = 1_000_000;
-        // 한 배치가 재귀 탐색의 한 프레임을 점유한다. 사용자 설정으로 스택 한도를 넘지 않게 한다.
+        // 후보가 보관하고 최종 검증에서 재생할 해답의 최대 길이다.
         internal const int MaximumInputs = 512;
 
         public static MapGenerationOptions Default => new()

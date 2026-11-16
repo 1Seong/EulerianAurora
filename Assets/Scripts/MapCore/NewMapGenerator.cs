@@ -42,6 +42,9 @@ namespace EulerianAurora.Maps
         private readonly Dictionary<MapGimmick, int> _placed = new();
         private int _spent, _target, _attempts, _backtracks, _restartAttemptCeiling;
         private bool _limited, _inputLimitReached;
+        private bool _checkRoadCapacity;
+        private bool[,,] _reachableRoads;
+        private Vector3Int[] _roadQueue;
         private MapCandidate _candidate;
 
         internal NewMapGenerator(int size, GenerationPlan plan, int seed, MapGenerationLimits limits,
@@ -105,8 +108,6 @@ namespace EulerianAurora.Maps
                 _inputs.Clear();
                 _spent = 0;
                 foreach (var kind in Kinds) _placed[kind] = 0;
-                _restartAttemptCeiling = Math.Min(_attemptLimit,
-                    _attempts + Math.Max(1, (_attemptLimit - _attempts) / (_restartLimit - restart)));
                 var start = _surface[_random.Next(_surface.Count)];
                 start = ConfigureRotation(start);
                 Set(start, TileType.Player);
@@ -117,6 +118,20 @@ namespace EulerianAurora.Maps
                 // 예산은 상한이며 필수 배치 외의 공간에는 여유를 남긴다.
                 int ordinaryCapacity = Math.Max(1, (_surface.Count - 1) * _profile.SurfaceFillMaxPercent / 100);
                 _target = Math.Max((int)minimumCost, Math.Min(desired, ordinaryCapacity));
+                int remainingAttempts = _attemptLimit - _attempts;
+                int share = Math.Max(1, remainingAttempts / (_restartLimit - restart));
+                _checkRoadCapacity = false;
+                if (_plan.AllowedGimmicks == MapGimmick.None)
+                {
+                    int pathLength = RemainingRoadCount();
+                    // 각 배치가 한 칸씩만 늘리는 경우, 목표 길이와 되돌림에 필요한 시도를 한 시작점에 배정한다.
+                    if (pathLength > share)
+                    {
+                        share = pathLength + share / 2;
+                        _checkRoadCapacity = true;
+                    }
+                }
+                _restartAttemptCeiling = _attempts + Math.Min(remainingAttempts, share);
                 if (_simulation.Reset(_board, _links) && Explore(_simulation))
                 {
                     string level = _plan.Difficulty switch { MapDifficulty.Easy => "쉬움", MapDifficulty.Medium => "보통", _ => "어려움" };
@@ -209,9 +224,45 @@ namespace EulerianAurora.Maps
             return retained;
         }
 
-        private bool Explore(PuzzleSolver.Simulation cursor, bool rotatedLast = false)
+        private bool Explore(PuzzleSolver.Simulation root)
         {
-            if (Stopped()) return false;
+            // 긴 경로도 Unity 작업 스레드의 호출 스택 크기에 의존하지 않도록 탐색 상태를 보관한다.
+            var frames = new Stack<SearchFrame>();
+            frames.Push(new SearchFrame(root, ExploreChoices(root).GetEnumerator()));
+            try
+            {
+                while (frames.Count > 0 && !Stopped())
+                {
+                    var frame = frames.Peek();
+                    if (frame.Choices.MoveNext())
+                    {
+                        var next = TryDescend(frame.Cursor, frame.Choices.Current);
+                        if (next != null) frames.Push(next);
+                        continue;
+                    }
+                    if (_candidate != null) return true;
+                    if (frames.Count > 1) _backtracks++;
+                    PopFrame(frames);
+                }
+                return false;
+            }
+            finally
+            {
+                while (frames.Count > 0) PopFrame(frames);
+            }
+        }
+
+        private void PopFrame(Stack<SearchFrame> frames)
+        {
+            var frame = frames.Pop();
+            frame.Choices.Dispose();
+            if (frames.Count > 0)
+                UndoSearchChoice(frame.Placement, frames.Peek().Cursor, frame.PreviousInputCount, frame.Cost);
+        }
+
+        private IEnumerable<SearchChoice> ExploreChoices(PuzzleSolver.Simulation cursor, bool rotatedLast = false)
+        {
+            if (Stopped()) yield break;
             int orderProgress = OrderProgress(cursor);
             if (_spent >= _target && cursor.Unpainted == 0 && cursor.GhostRemaining == 0 &&
                 RequirementsMet(orderProgress) && _inputs.Count > 0)
@@ -221,19 +272,18 @@ namespace EulerianAurora.Maps
                 int axis = _placed[MapGimmick.Rotation] > 0 ? _rotationAxis : 0;
                 var layers = axis == 0 ? null : RetainUsedRotationLayers();
                 var witness = PuzzleSolver.VerifySequence(_board, _links, _inputs, axis, layers);
-                if (Stopped()) return false;
+                if (Stopped()) yield break;
                 if (witness.IsSolvable && (_plan.RequiredGimmicks & witness.UsedGimmicks) == _plan.RequiredGimmicks)
                 {
                     _candidate = new MapCandidate(MapDocument.FromBoard(_board, _links, axis, layers), witness,
                         _spent, _attempts, _backtracks);
-                    return true;
                 }
-                return false;
+                yield break;
             }
             if (_inputs.Count >= _search.InputLimit)
             {
                 _inputLimitReached = true;
-                return false;
+                yield break;
             }
 
             var position = cursor.Position;
@@ -247,10 +297,10 @@ namespace EulerianAurora.Maps
             {
                 bool canReplaceRoad = _laserTargets.Count > 0 &&
                     CanPlace(MapGimmick.Inverter, orderProgress, _plan.Budget.Cost(MapGimmick.None));
-                if (odd && !canReplaceRoad && cursor.CannotFinish()) return false;
+                if (odd && !canReplaceRoad && cursor.CannotFinish()) yield break;
                 if (odd && _placed[MapGimmick.Rotation] < _minimum[MapGimmick.Rotation])
                 {
-                    if (TryRotations(rotations, cursor)) return true;
+                    foreach (var choice in RotationChoices(rotations)) yield return choice;
                 }
                 // 반전으로 열린 칸에는 방문한 길과 레이저로만 칠한 길이 모두 포함된다.
                 int first = _random.Next(TileHelper.Directions.Length);
@@ -259,30 +309,21 @@ namespace EulerianAurora.Maps
                     var direction = TileHelper.Directions[(first + i) % TileHelper.Directions.Length];
                     var entry = position + direction;
                     if (canReplaceRoad && entry.IsOnSurface(_size) && _laserTargets.Contains(cursor.InitialCell(entry)) &&
-                        InitialTile(cursor.InitialCell(entry)) == (char)TileType.Road && cursor.TileAt(entry) == (char)TileType.Road &&
-                        TryPlacement(new Placement(MapGimmick.Inverter, entry, direction, default, default, replacesRoad: true), cursor))
-                        return true;
+                        InitialTile(cursor.InitialCell(entry)) == (char)TileType.Road && cursor.TileAt(entry) == (char)TileType.Road)
+                        yield return new SearchChoice(new Placement(MapGimmick.Inverter, entry, direction, default, default, replacesRoad: true));
                 }
                 for (int i = 0; i < TileHelper.Directions.Length; i++)
                 {
                     var direction = TileHelper.Directions[(first + i) % TileHelper.Directions.Length];
                     var entry = position + direction;
-                    if (!IsOpen(cursor, entry) || !TakeAttempt()) continue;
-                    var next = cursor.Fork();
-                    if (!next.TryStep(direction) || !MatchesRotationCount(next, cursor.Events.Count, 0)) continue;
-                    _inputs.Add(direction);
-                    try
-                    {
-                        if (Explore(next)) return true;
-                        _backtracks++;
-                    }
-                    finally { _inputs.RemoveAt(_inputs.Count - 1); }
+                    if (IsOpen(cursor, entry)) yield return new SearchChoice(direction);
                 }
             }
             // 홀수 번째 반전 뒤에는 뒤늦게 추가한 미색칠 칸도 닫혀 있다.
             if (odd)
             {
-                return TryRotations(rotations, cursor);
+                foreach (var choice in RotationChoices(rotations)) yield return choice;
+                yield break;
             }
 
             var roads = new List<Placement>();
@@ -385,9 +426,8 @@ namespace EulerianAurora.Maps
                 int pick = PickPlacement(options, kind, inverted, cursor);
                 var action = options[pick];
                 options.RemoveAt(pick);
-                if (TryPlacement(action, cursor)) return true;
+                yield return new SearchChoice(action);
             }
-            return false;
         }
 
         private int PickPlacement(List<Placement> options, MapGimmick kind, int inverted, PuzzleSolver.Simulation cursor)
@@ -445,16 +485,15 @@ namespace EulerianAurora.Maps
             return draw < first ? 0 : draw < first + second ? 1 : 2;
         }
 
-        private bool TryRotations(List<Placement> options, PuzzleSolver.Simulation cursor)
+        private IEnumerable<SearchChoice> RotationChoices(List<Placement> options)
         {
             while (options.Count > 0 && !Stopped() && _attempts < _restartAttemptCeiling)
             {
                 int pick = PickRotation(options);
                 var action = options[pick];
                 options.RemoveAt(pick);
-                if (TryPlacement(action, cursor)) return true;
+                yield return new SearchChoice(action);
             }
-            return false;
         }
 
         private void AddRotationOptions(PuzzleSolver.Simulation cursor, int orderProgress, bool allowNewRoad,
@@ -541,34 +580,86 @@ namespace EulerianAurora.Maps
             return true;
         }
 
-        private bool TryPlacement(Placement action, PuzzleSolver.Simulation cursor)
+        private SearchFrame TryDescend(PuzzleSolver.Simulation cursor, SearchChoice choice)
         {
-            if (!TakeAttempt()) return false;
+            if (!TakeAttempt()) return null;
             int previousInputCount = _inputs.Count;
+            if (!choice.Placement.HasValue)
+            {
+                var next = cursor.Fork();
+                if (!next.TryStep(choice.Input) || !MatchesRotationCount(next, cursor.Events.Count, 0)) return null;
+                _inputs.Add(choice.Input);
+                return new SearchFrame(next, ExploreChoices(next).GetEnumerator(), previousInputCount: previousInputCount);
+            }
+
+            var action = choice.Placement.Value;
             int cost = PlacementCost(action.Kind, action.RayLength) -
                 (action.ReplacesRoad || action.RotationOnly ? _plan.Budget.Cost(MapGimmick.None) : 0);
             Apply(action, cursor);
             _spent += cost;
+            SearchFrame frame = null;
             try
             {
                 if (_inputs.Count > _search.InputLimit)
                 {
                     _inputLimitReached = true;
-                    return false;
+                    return null;
                 }
-                var replay = cursor.Fork(copyState: false);
-                if (ReplayPrefix(replay, cursor, previousInputCount, action) &&
-                    (action.Kind != MapGimmick.Rotation || action.RotationOnly || replay.Position == action.Exit) &&
-                    Explore(replay, rotatedLast: action.RotationOnly)) return true;
-                _backtracks++;
-                return false;
+                bool roadsOnly = _plan.AllowedGimmicks == MapGimmick.None;
+                if (_checkRoadCapacity && !HasRoomForRoads(action.Entry))
+                {
+                    _backtracks++;
+                    return null;
+                }
+                var replay = cursor.Fork(copyState: roadsOnly);
+                bool valid = roadsOnly ? replay.TryAppendRoad(action.Input) : ReplayPrefix(replay, cursor, previousInputCount, action);
+                if (valid &&
+                    (action.Kind != MapGimmick.Rotation || action.RotationOnly || replay.Position == action.Exit))
+                    frame = new SearchFrame(replay, ExploreChoices(replay, action.RotationOnly).GetEnumerator(),
+                        action, previousInputCount, cost);
+                else _backtracks++;
+                return frame;
             }
             finally
             {
-                Undo(action, cursor);
-                _inputs.RemoveRange(previousInputCount, _inputs.Count - previousInputCount);
-                _spent -= cost;
+                if (frame == null) UndoSearchChoice(action, cursor, previousInputCount, cost);
             }
+        }
+
+        private void UndoSearchChoice(Placement? action, PuzzleSolver.Simulation cursor, int previousInputCount, int cost)
+        {
+            if (action.HasValue) Undo(action.Value, cursor);
+            _inputs.RemoveRange(previousInputCount, _inputs.Count - previousInputCount);
+            _spent -= cost;
+        }
+
+        private int RemainingRoadCount()
+        {
+            int cost = _plan.Budget.Cost(MapGimmick.None);
+            return (Math.Max(0, _target - _spent) + cost - 1) / cost;
+        }
+
+        private bool HasRoomForRoads(Vector3Int end)
+        {
+            int required = RemainingRoadCount();
+            if (required == 0) return true;
+            // 길이 목표를 채울 수 없는 고립된 빈 공간에서는 더 깊이 탐색하지 않는다.
+            _reachableRoads ??= new bool[_size, _size, _size];
+            _roadQueue ??= new Vector3Int[_surface.Count];
+            Array.Clear(_reachableRoads, 0, _reachableRoads.Length);
+            _roadQueue[0] = end;
+            int tail = 1;
+            for (int head = 0; head < tail; head++)
+            foreach (var direction in TileHelper.Directions)
+            {
+                var cell = _roadQueue[head] + direction;
+                if (!cell.IsOnSurface(_size) || InitialTile(cell) != (char)TileType.Empty ||
+                    _reachableRoads[cell.x, cell.y, cell.z]) continue;
+                if (--required == 0) return true;
+                _reachableRoads[cell.x, cell.y, cell.z] = true;
+                _roadQueue[tail++] = cell;
+            }
+            return false;
         }
 
         private bool ReplayPrefix(PuzzleSolver.Simulation replay, PuzzleSolver.Simulation cursor,
@@ -821,6 +912,28 @@ namespace EulerianAurora.Maps
         private void Set(Vector3Int p, TileType tile) => _board[p.x, p.y, p.z] = (char)tile;
         private static int Distance(Vector3Int a, Vector3Int b) => Math.Abs(a.x - b.x) + Math.Abs(a.y - b.y) + Math.Abs(a.z - b.z);
         private MapGenerationResult Failure(MapGenerationStatus status, string message) => new(status, null, message, _plan);
+
+        private sealed class SearchFrame
+        {
+            internal readonly PuzzleSolver.Simulation Cursor;
+            internal readonly IEnumerator<SearchChoice> Choices;
+            internal readonly Placement? Placement;
+            internal readonly int PreviousInputCount, Cost;
+
+            internal SearchFrame(PuzzleSolver.Simulation cursor, IEnumerator<SearchChoice> choices,
+                Placement? placement = null, int previousInputCount = 0, int cost = 0) =>
+                (Cursor, Choices, Placement, PreviousInputCount, Cost) =
+                (cursor, choices, placement, previousInputCount, cost);
+        }
+
+        private readonly struct SearchChoice
+        {
+            internal readonly Placement? Placement;
+            internal readonly Vector3Int Input;
+
+            internal SearchChoice(Placement placement) => (Placement, Input) = (placement, default);
+            internal SearchChoice(Vector3Int input) => (Placement, Input) = (null, input);
+        }
 
         private readonly struct Placement
         {

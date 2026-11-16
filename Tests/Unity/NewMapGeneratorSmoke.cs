@@ -29,6 +29,7 @@ public static class NewMapGeneratorSmoke
         try
         {
             var total = Stopwatch.StartNew();
+            CheckLongRoadGeneration();
             CheckLiveGenerationSettings();
             // 수동 UI는 선택한 기믹 모두의 실제 사용을 요구한다. 배열로 필수 조건을 따로 주지 않는다.
             var supported = MapGimmick.Portal | MapGimmick.Dash | MapGimmick.Laser | MapGimmick.Ghost;
@@ -458,6 +459,25 @@ public static class NewMapGeneratorSmoke
             EditorApplication.Exit(0);
         }
         catch (Exception error) { Debug.LogException(error); EditorApplication.Exit(1); }
+    }
+
+    private static void CheckLongRoadGeneration()
+    {
+        var options = MapGenerationOptions.Default;
+        options.Hard.MaximumBudget = 250;
+        options.Hard.TargetBudgetMinPercent = options.Hard.TargetBudgetMaxPercent = 100;
+        var request = Request(10, MapDifficulty.Hard);
+        request.UiConditions.AllowedGimmicks = MapGimmick.None;
+        for (int seed = 0; seed < 8; seed++)
+        {
+            var result = System.Threading.Tasks.Task.Run(() =>
+                MapTools.Generate(null, request, seed, options: options)).GetAwaiter().GetResult();
+            Check(result.Candidate != null, $"작업 스레드에서 예산 250 일반 길 생성 {seed}: {result.Message}");
+            var candidate = result.Candidate;
+            Check(candidate.GenerationCost == 250 && candidate.Witness.SolutionInputs.Count == 250,
+                "일반 길의 목표 예산과 해답 길이");
+            Check(MapTools.Verify(candidate.Map, candidate.Witness.SolutionInputs).IsSolvable, "긴 일반 길 해답 재생");
+        }
     }
 
     private static void CheckLiveGenerationSettings()
