@@ -2,6 +2,12 @@
 
 **담당자:** 최성원 — 타일 배치, 편집 상태 되돌리기, 플레이 테스트·저장 흐름 구현
 
+타일 배치 전에 표면과 방향을 검사하고 맵·시작점을 보관합니다. 수동 플레이 테스트에는 복사본을 넘겨 편집 데이터를 보호합니다.
+
+- **발췌** [타일 배치·Undo·수동 테스트](#타일-배치undo수동-테스트)
+- **원본** [수동 플레이 테스트](https://github.com/1Seong/EulerianAurora/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/MapEditor.cs#L374) · [맵 저장](https://github.com/1Seong/EulerianAurora/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/MapEditor.cs#L535)
+- [생략 및 재구성한 내용](#생략-및-재구성한-내용)
+
 ## 코드
 
 ```mermaid
@@ -18,6 +24,8 @@ flowchart LR
 **MapEditor:** 편집 데이터를 관리하고 테스트·저장으로 전달합니다. **EditTile:** 셀 클릭과 대시 배치 가능 여부를 검사합니다. **GameManager:** 편집 맵을 플레이 모드로 넘깁니다.
 
 Undo는 맵·시작점 사본을 복원합니다. 테스트에는 별도 복사본을 넘겨 플레이 중 변경이 편집 원본에 역류하지 않도록 합니다.
+
+### 타일 배치·Undo·수동 테스트
 
 ```csharp
 // MapEditor의 편집 상태와 EditTile의 배치 검사를 재구성한 발췌

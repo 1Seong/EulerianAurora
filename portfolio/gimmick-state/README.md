@@ -2,6 +2,12 @@
 
 **담당자:** 최성원 — 퍼즐 기믹과 이동 상태 연동
 
+이동 시 Ghost 횟수를 차감하고, 레이저는 진행 방향의 다음 타일을 확인합니다. 대시는 다음 이동을 호출해 일반 이동과 기믹 처리를 이어갑니다.
+
+- **발췌** [Ghost·레이저·대시 분기](#ghost레이저대시-분기)
+- **원본** [이동과 기믹](https://github.com/1Seong/EulerianAurora/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/PuzzlePlayer.cs#L539)
+- [생략 및 재구성한 내용](#생략-및-재구성한-내용)
+
 ## 코드
 
 **PuzzlePlayer:** 획득한 기믹 상태를 다음 이동에 적용합니다. 이동 취소는 gameplay 샘플의 상태 스냅샷을 사용하며, 회전은 layer-rotation 샘플에 분리돼 있습니다.
@@ -17,6 +23,8 @@ flowchart LR
   B -->|없음| E
   E --> G["대시이면 추가 이동 · 별도 Undo 저장 안 함"]
 ```
+
+### Ghost·레이저·대시 분기
 
 ```csharp
 // ApplyItem의 상태 획득과 방향 대시를 대표로 발췌

@@ -2,6 +2,12 @@
 
 **담당자:** 최성원 — 이동·타일 상태 처리, 기믹 연동, 게임 상태 복원
 
+한 번의 입력에서 이동·색칠·기믹·클리어 판정을 순서대로 처리하고, Undo에서 타일과 플레이어·포탈·기믹 상태를 함께 복원합니다.
+
+- **발췌** [이동·색칠·클리어](#이동색칠클리어) · [변경 전 상태 저장과 Undo](#변경-전-상태-저장과-undo)
+- **원본** [입력 처리](https://github.com/1Seong/EulerianAurora/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/PuzzlePlayer.cs#L1154) · [Undo 상태 저장](https://github.com/1Seong/EulerianAurora/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/PuzzlePlayer.cs#L1089)
+- [생략 및 재구성한 내용](#생략-및-재구성한-내용)
+
 ## 코드
 
 **핵심 루프:** 입력 한 번을 이동 검사·색칠·기믹 처리·클리어 판정까지 순서대로 완료한 뒤 다음 입력을 받습니다. 초기화 때 원본 맵을 복사하고 시작점과 남은 타일 수를 구성합니다.
@@ -22,6 +28,8 @@ flowchart TB
 **PuzzlePlayer:** 입력과 이동·기믹 순서를 제어합니다. **TileHelper / PuzzleTile:** 타일 데이터 변환과 화면 표시를 나눕니다. **GameManager:** 일반 스테이지·유저 맵·에디터 수동 테스트의 클리어 후 처리를 맡습니다.
 
 도식과 아래 코드는 기본 이동·포탈·인버터 경로를 발췌한 것입니다. 원본의 Ghost·레이저·대시는 별도 기믹 상태 샘플, 레이어 회전 분기는 회전 샘플에서 다룹니다.
+
+### 이동·색칠·클리어
 
 ```csharp
 // 입력 진입 예시: 나머지 5방향도 현재 카메라의 기준 벡터를 사용한다.
@@ -113,6 +121,8 @@ flowchart LR
   R --> V["다시 표시 후 입력 대기"]
 ```
 
+### 변경 전 상태 저장과 Undo
+
 ```csharp
 private readonly Stack<(
     char[,,] Map, Vector3Int Position, int Roads, int Ghost, bool Laser,
@@ -144,6 +154,8 @@ public void Undo()
 ```
 
 **PuzzlePlayer.InverterEffectAsync:** 타일 상태를 반전하고, 발동 위치에서 가까운 순서대로 파동을 보여줍니다.
+
+### 인버터 파동
 
 ```csharp
 // 인버터: 데이터는 즉시 반전, 연출은 맨해튼 거리별로 순차 재생

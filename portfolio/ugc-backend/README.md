@@ -2,6 +2,12 @@
 
 **담당자:** 최성원 — Supabase 데이터 API 연동, 검색·정렬·필터, 사용자별 맵 상태 조회
 
+검색 조건에 맞는 맵을 페이지 단위로 불러온 뒤, 페이지의 맵 키를 묶어 사용자별 반응과 작성자 정보를 채웁니다.
+
+- **발췌** [페이지 조회와 사용자 상태 결합](#페이지-조회와-사용자-상태-결합) · [초안 저장·공개·사용자 반응](#초안-저장공개사용자-반응)
+- **원본** [페이지·반응 결합](https://github.com/1Seong/EulerianAurora/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/DBManager.cs#L271)
+- [생략 및 재구성한 내용](#생략-및-재구성한-내용)
+
 ## 코드
 
 ```mermaid
@@ -23,6 +29,8 @@ sequenceDiagram
 ```
 
 **DBManager:** 맵과 사용자 상태를 조회·저장합니다. **UserLevelList:** 검색 조건과 좋아요·신고 입력을 받습니다. **LevelListController:** 작성 중인 맵과 업로드한 맵의 관리를 담당합니다. 아래는 UI 입력을 인자로 바꾼 데이터 처리 부분입니다.
+
+### 페이지 조회와 사용자 상태 결합
 
 ```csharp
 // DBManager 내부 발췌. client는 로그인된 Supabase.Client이다.
@@ -106,6 +114,8 @@ private static List<T> ReadList<T>(string json)
         : JsonConvert.DeserializeObject<List<T>>(json) ?? new List<T>();
 ```
 
+### 초안 저장·공개·사용자 반응
+
 ```csharp
 // 원본 Postgrest 모델과 복합키를 그대로 사용한다.
 // 개인 작업 목록에 새 맵 초안 생성
@@ -151,6 +161,8 @@ public async Task ReportAsync(long mapId, Guid creatorId, string reason)
 **서버·DB 발췌**
 
 2026-10-17 Supabase에서 확인한 구조 중 복합키·소유자 검사·배치 조회만 설명용으로 재구성했습니다. 아래 개념명·테이블명·정책명·파라미터는 예시로 바꿨으며, 실제 서버 정의나 적용용 마이그레이션이 아닙니다.
+
+### 서버와 DB 예시
 
 ```mermaid
 %%{init: {"htmlLabels": false, "themeVariables": {"fontFamily": "Arial, sans-serif"}, "flowchart": {"padding": 20, "diagramPadding": 20}, "sequence": {"diagramMarginX": 24, "diagramMarginY": 16, "wrap": true}}}%%

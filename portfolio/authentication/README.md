@@ -2,6 +2,12 @@
 
 **담당자:** 최성원 — Unity 인증 연동, 세션 복원, Google·Discord 로그인 흐름 구성
 
+앱 시작 시 저장된 세션을 복원하고, PC에서 Google·Discord 인증을 마친 브라우저의 콜백을 Unity 세션에 연결합니다.
+
+- **발췌** [세션 복원과 이메일 인증](#세션-복원과-이메일-인증) · [PC 브라우저 로그인](#pc-브라우저-로그인)
+- **원본** [세션 초기화](https://github.com/1Seong/EulerianAurora/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/App/com/example/SupabaseManager.cs#L36) · [브라우저 인증](https://github.com/1Seong/EulerianAurora/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/App/com/example/OAuthManager.cs#L53)
+- [생략 및 재구성한 내용](#생략-및-재구성한-내용)
+
 ## 코드
 
 ```mermaid
@@ -31,6 +37,8 @@ flowchart LR
   A -->|상태 콜백| L["SessionListener · 상태 로그"]
   M --> S["세션 저장 · 로그인 여부 갱신"]
 ```
+
+### 세션 복원과 이메일 인증
 
 ```csharp
 // SupabaseManager와 SignInWithEmailPassword의 핵심 흐름을 통합한 발췌
@@ -120,6 +128,8 @@ public void Shutdown()
 ```
 
 **OAuthManager:** 외부 브라우저의 Google·Discord 인증 결과를 PC 앱으로 받아 동일한 Supabase 세션으로 연결합니다.
+
+### PC 브라우저 로그인
 
 ```csharp
 // OAuthManager: PC의 로컬 콜백을 사용하며 provider만 바꿔 재사용한다.
