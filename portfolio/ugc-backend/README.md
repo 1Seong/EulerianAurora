@@ -1,14 +1,14 @@
 # UGC 맵 저장과 목록 조회
 
-**담당자:** 최성원 — Supabase 데이터 API 연동, 검색·정렬·필터, 사용자별 맵 상태 조회
+담당자 최성원 — Supabase 데이터 API 연동, 검색·정렬·필터, 사용자별 맵 상태 조회
 
-검색 조건에 맞는 맵을 페이지 단위로 불러온 뒤, 페이지의 맵 키를 묶어 사용자별 반응과 작성자 정보를 채웁니다.
+플레이어는 자신이 만든 맵을 초안으로 저장했다가 게시하고, 다른 사람이 만든 맵을 검색할 수 있습니다. 예를 들어 미클리어 맵만 골라 좋아요 순으로 정렬하면 목록에 작성자와 내 클리어 여부가 함께 표시됩니다. 맵 목록과 사용자별 기록을 페이지 단위로 묶어 받아 이 화면을 구성했습니다.
 
-- **발췌** [페이지 조회와 사용자 상태 결합](#페이지-조회와-사용자-상태-결합) · [초안 저장·공개·사용자 반응](#초안-저장공개사용자-반응)
-- **원본** [페이지·반응 결합](https://github.com/1Seong/EulerianAurora/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/DBManager.cs#L271)
-- [생략 및 재구성한 내용](#생략-및-재구성한-내용)
+[목록 조회](#페이지-단위-목록-조회) · [초안 저장과 게시](#초안-저장과-게시) · [서버 예시](#서버에서-소유자와-사용자-상태-확인) · [원본 코드와 예시 범위](#원본-코드와-예시-범위)
 
 ## 코드
+
+### 페이지 단위 목록 조회
 
 ```mermaid
 %%{init: {"htmlLabels": false, "themeVariables": {"fontFamily": "Arial, sans-serif"}, "flowchart": {"padding": 20, "diagramPadding": 20}, "sequence": {"diagramMarginX": 24, "diagramMarginY": 16, "wrap": true}}}%%
@@ -28,9 +28,7 @@ sequenceDiagram
   C-->>UI: 복합키로 결합한 결과
 ```
 
-**DBManager:** 맵과 사용자 상태를 조회·저장합니다. **UserLevelList:** 검색 조건과 좋아요·신고 입력을 받습니다. **LevelListController:** 작성 중인 맵과 업로드한 맵의 관리를 담당합니다. 아래는 UI 입력을 인자로 바꾼 데이터 처리 부분입니다.
-
-### 페이지 조회와 사용자 상태 결합
+`UserLevelList`에서 넘긴 검색 조건으로 `DBManager`가 한 페이지에 최대 18개 맵을 조회합니다. 페이지가 돌아오면 맵들의 사용자별 상태와 작성자 닉네임을 두 배치 요청으로 병렬 조회합니다. 예를 들어 두 작성자가 모두 `map_id = 7`인 맵을 갖고 있어도, 맵 ID와 작성자 ID를 함께 사용해 각 맵의 좋아요와 클리어 상태를 구분합니다.
 
 ```csharp
 // DBManager 내부 발췌. client는 로그인된 Supabase.Client이다.
@@ -114,7 +112,9 @@ private static List<T> ReadList<T>(string json)
         : JsonConvert.DeserializeObject<List<T>>(json) ?? new List<T>();
 ```
 
-### 초안 저장·공개·사용자 반응
+### 초안 저장과 게시
+
+`LevelListController`는 제작 중인 맵과 이미 올린 맵을 관리합니다. 게시할 때는 공개 맵의 복합키로 등록하거나 기존 게시본을 갱신합니다. 좋아요 전환과 신고는 화면에서 선택한 맵의 ID와 작성자 ID를 함께 넘깁니다.
 
 ```csharp
 // 원본 Postgrest 모델과 복합키를 그대로 사용한다.
@@ -158,11 +158,9 @@ public async Task ReportAsync(long mapId, Guid creatorId, string reason)
 }
 ```
 
-**서버·DB 발췌**
+### 서버에서 소유자와 사용자 상태 확인
 
-2026-10-17 Supabase에서 확인한 구조 중 복합키·소유자 검사·배치 조회만 설명용으로 재구성했습니다. 아래 개념명·테이블명·정책명·파라미터는 예시로 바꿨으며, 실제 서버 정의나 적용용 마이그레이션이 아닙니다.
-
-### 서버와 DB 예시
+아래 도식과 SQL은 2026-10-17에 확인한 서버 구조를 바탕으로 복합키, 소유자 검사, 배치 조회를 설명한 예시입니다. 도식과 SQL에서는 설명용 이름을 사용합니다.
 
 ```mermaid
 %%{init: {"htmlLabels": false, "themeVariables": {"fontFamily": "Arial, sans-serif"}, "flowchart": {"padding": 20, "diagramPadding": 20}, "sequence": {"diagramMarginX": 24, "diagramMarginY": 16, "wrap": true}}}%%
@@ -179,7 +177,7 @@ erDiagram
   LEVEL ||--o{ USER_REACTION : "맵과 작성자 키로 연결"
 ```
 
-**접근 범위:** 개인 초안과 공개 맵의 접근 범위를 나눕니다. 대표 예시로 수정 전·후 모두 소유자를 검사하는 형태만 남겼습니다. 전체 역할·정책 조합은 공개하지 않습니다.
+수정 권한은 DB의 행 수준 보안 정책으로 제한합니다. 아래 예시의 `USING`은 로그인한 사용자가 수정하려는 행을 소유하는지, `WITH CHECK`는 수정된 행의 소유자가 여전히 그 사용자인지 검사합니다. [Supabase RLS 문서](https://supabase.com/docs/guides/database/postgres/row-level-security)
 
 ```sql
 -- sample_levels와 정책 이름은 설명용 가칭이다.
@@ -189,7 +187,7 @@ CREATE POLICY "owner_update_example" ON sample_levels
   WITH CHECK ((SELECT auth.uid()) = creator_id);
 ```
 
-**배치 조회:** 페이지의 복합키 목록을 한 번에 전달해 사용자 상태와 결합합니다. 아래는 좋아요 판정에 해당하는 JOIN 하나만 남긴 예시이며, 클리어·신고·닉네임 처리와 실제 RPC 본문은 생략했습니다. `:level_keys`·`:viewer_id`는 호출부의 입력을 나타내는 설명용 자리표시자입니다.
+좋아요 조회 예시는 입력으로 받은 페이지의 맵 키에 현재 사용자의 좋아요 기록을 붙입니다. `LEFT JOIN`을 사용하면 좋아요 기록이 없는 맵도 결과에 남아 `false`로 표시됩니다. `:level_keys`는 맵 ID와 작성자 ID의 쌍을 담은 JSON 배열이고, 예시에서는 현재 사용자의 ID를 `auth.uid()`로 가져옵니다.
 
 ```sql
 WITH keys AS (
@@ -203,15 +201,12 @@ FROM keys k
 LEFT JOIN sample_reactions reaction
   ON reaction.level_id = k.level_id
   AND reaction.creator_id = k.creator_id
-  AND reaction.viewer_id = CAST(:viewer_id AS uuid);
+  AND reaction.viewer_id = (SELECT auth.uid());
 ```
 
-**서버 처리:** 정렬 기준은 허용 목록으로 제한하고, 좋아요 변경은 JWT 사용자 확인 뒤 처리합니다. 집계·기록 갱신 트리거는 원리만 언급하고 본문은 공개하지 않습니다. 이 샘플은 동시성·권한별 실동작을 검증한 부하·보안 테스트 자료가 아닙니다.
+당시 확인한 서버에서 정렬 기준은 허용 목록으로 제한했고, 좋아요 변경은 인증 토큰의 사용자 확인을 거쳤습니다.
 
-## 생략 및 재구성한 내용
+## 원본 코드와 예시 범위
 
-- 원본: `Assets/Scripts/DBManager.cs`, `LevelListController.cs`, `Assets/Scripts/UI/UserLevelList.cs`. 기준 커밋: `66882730c36e4c3f4e7d59f019a835ea749f39b8`.
-- 상태 조회는 **키 목록 기반 배치**, 상태·닉네임 조회 사이에는 **병렬 처리**를 사용합니다. 전체 목록 조회가 한 요청으로 끝나는 것은 아닙니다.
-- `Map`, `MapCreating`, `Report`, `Nickname`, 결과 모델·enum, SDK와 JSON 라이브러리는 원본 의존성입니다. 테이블 속성·복합키 정의, UI 셀·썸네일 로딩, 예외 팝업과 버튼 제어는 생략한 설명용 발췌입니다.
-- 데이터 포맷 변환과 Storage 캡처·업로드는 에디터 원본에 있으며 여기서는 제외했습니다.
-- DB 도식은 맵과 사용자 반응의 개념 관계만 남겼습니다. 전체 스키마·실제 정책명·권한 조합·트리거·RPC 원문·프로젝트 주소·키·사용자 데이터는 포함하지 않았습니다. SQL의 가칭과 자리표시자는 별도 매핑 없이는 실행할 수 없습니다.
+- 기준 커밋은 [`6688273`](https://github.com/1Seong/Capstone2/commit/66882730c36e4c3f4e7d59f019a835ea749f39b8)입니다. 목록 처리 원본은 [DBManager.FetchPageWithDetailsAsync](https://github.com/1Seong/Capstone2/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/DBManager.cs#L271), [UserLevelList](https://github.com/1Seong/Capstone2/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/UI/UserLevelList.cs), [LevelListController](https://github.com/1Seong/Capstone2/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/LevelListController.cs)에서 확인할 수 있습니다.
+- C# 예시는 UI 입력을 메서드 인자로 바꾸고, 페이지 조회와 결과 결합을 한 함수에 모았습니다. 썸네일 처리와 저장용 데이터 변환은 씬 컨트롤러와 에디터 원본에 있습니다.

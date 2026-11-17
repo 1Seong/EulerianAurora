@@ -1,16 +1,14 @@
 # 퍼즐 게임플레이 루프와 상태 복원
 
-**담당자:** 최성원 — 이동·타일 상태 처리, 기믹 연동, 게임 상태 복원
+담당자 최성원 — 이동·타일 상태 처리, 기믹 연동, 게임 상태 복원
 
-한 번의 입력에서 이동·색칠·기믹·클리어 판정을 순서대로 처리하고, Undo에서 타일과 플레이어·포탈·기믹 상태를 함께 복원합니다.
+플레이어는 큐브 표면을 이동해 모든 길을 칠하면 퍼즐을 클리어합니다. 포탈이나 인버터가 이동 경로와 남은 타일을 바꿀 수 있으므로, 방향 입력에 따른 이동과 기믹 처리를 마친 뒤 클리어를 판정합니다. 되돌리기를 누르면 그 입력 전의 위치와 보드 상태가 함께 복원됩니다.
 
-- **발췌** [이동·색칠·클리어](#이동색칠클리어) · [변경 전 상태 저장과 Undo](#변경-전-상태-저장과-undo)
-- **원본** [입력 처리](https://github.com/1Seong/EulerianAurora/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/PuzzlePlayer.cs#L1154) · [Undo 상태 저장](https://github.com/1Seong/EulerianAurora/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/PuzzlePlayer.cs#L1089)
-- [생략 및 재구성한 내용](#생략-및-재구성한-내용)
+[입력 처리와 클리어 판정](#입력-처리와-클리어-판정) · [되돌리기](#한-입력을-되돌리는-상태-기록) · [인버터](#인버터의-타일-반전과-파동-연출) · [원본 코드와 예시 범위](#원본-코드와-예시-범위)
 
 ## 코드
 
-**핵심 루프:** 입력 한 번을 이동 검사·색칠·기믹 처리·클리어 판정까지 순서대로 완료한 뒤 다음 입력을 받습니다. 초기화 때 원본 맵을 복사하고 시작점과 남은 타일 수를 구성합니다.
+### 입력 처리와 클리어 판정
 
 ```mermaid
 %%{init: {"htmlLabels": false, "themeVariables": {"fontFamily": "Arial, sans-serif"}, "flowchart": {"padding": 12, "diagramPadding": 20, "rankSpacing": 24}, "sequence": {"diagramMarginX": 24, "diagramMarginY": 16, "wrap": true}}}%%
@@ -25,11 +23,7 @@ flowchart TB
   CHECK -->|예| CLEAR["GameManager · 모드별 클리어 처리"]
 ```
 
-**PuzzlePlayer:** 입력과 이동·기믹 순서를 제어합니다. **TileHelper / PuzzleTile:** 타일 데이터 변환과 화면 표시를 나눕니다. **GameManager:** 일반 스테이지·유저 맵·에디터 수동 테스트의 클리어 후 처리를 맡습니다.
-
-도식과 아래 코드는 기본 이동·포탈·인버터 경로를 발췌한 것입니다. 원본의 Ghost·레이저·대시는 별도 기믹 상태 샘플, 레이어 회전 분기는 회전 샘플에서 다룹니다.
-
-### 이동·색칠·클리어
+`PuzzlePlayer`는 이동 전 상태를 저장하고, 도착 타일을 칠한 뒤 색칠 전의 타일 종류로 기믹을 실행합니다. 예를 들어 포탈에 들어가면 연결된 출구로 이동해 출구 칸까지 처리합니다. `GameManager`는 클리어 결과를 일반 스테이지, 유저 맵, 에디터 플레이 테스트에 맞게 전달합니다.
 
 ```csharp
 // 입력 진입 예시: 나머지 5방향도 현재 카메라의 기준 벡터를 사용한다.
@@ -108,9 +102,9 @@ private void CheckGameCleared()
 }
 ```
 
-**PuzzlePlayer.SaveUndoState / Undo:** 맵뿐 아니라 포탈과 기믹 상태까지 함께 되돌립니다.
+### 한 입력을 되돌리는 상태 기록
 
-**Memento 방식의 Undo:** 변경 전 값의 사본을 스택에 보관합니다. 명령 객체를 실행·취소하는 Command 패턴이 아니라 상태 복원이며, Originator·보관 역할은 PuzzlePlayer 안에 있습니다.
+포탈을 통과한 입력을 취소하면 이전 위치, 타일 색칠 상태, 남은 길 수가 함께 복원되어야 합니다. `SaveUndoState()`는 이동 전 보드와 포탈 연결을 복사해 스택에 넣고, 고스트 잔여 횟수와 레이저 보유 여부도 기록합니다. `Undo()`는 마지막 기록으로 돌아갑니다.
 
 ```mermaid
 %%{init: {"htmlLabels": false, "themeVariables": {"fontFamily": "Arial, sans-serif"}, "flowchart": {"padding": 20, "diagramPadding": 20}, "sequence": {"diagramMarginX": 24, "diagramMarginY": 16, "wrap": true}}}%%
@@ -120,8 +114,6 @@ flowchart LR
   S -->|Pop| R["맵과 플레이어 및 기믹 복원"]
   R --> V["다시 표시 후 입력 대기"]
 ```
-
-### 변경 전 상태 저장과 Undo
 
 ```csharp
 private readonly Stack<(
@@ -153,9 +145,9 @@ public void Undo()
 }
 ```
 
-**PuzzlePlayer.InverterEffectAsync:** 타일 상태를 반전하고, 발동 위치에서 가까운 순서대로 파동을 보여줍니다.
+### 인버터의 타일 반전과 파동 연출
 
-### 인버터 파동
+인버터는 발동 칸을 제외한 표면 타일의 색칠 상태를 바꾸고, 미도색 타일 수를 새로 셉니다. 화면에서는 발동 위치에서 가까운 타일부터 차례로 바뀌도록 표시해 반전이 어디서 시작됐는지 알 수 있게 합니다.
 
 ```csharp
 // 인버터: 데이터는 즉시 반전, 연출은 맨해튼 거리별로 순차 재생
@@ -199,11 +191,9 @@ private async UniTask ApplyInverterAsync(Vector3Int origin)
 }
 ```
 
-## 생략 및 재구성한 내용
+## 원본 코드와 예시 범위
 
-- 원본: `Assets/Scripts/PuzzlePlayer.cs`, `PuzzleTile.cs`. 기준 커밋: `66882730c36e4c3f4e7d59f019a835ea749f39b8`.
-- 루프 도식은 기본 이동·포탈·인버터 경로입니다. 원본의 방향별 이동 래퍼·MovePlayer·ApplyItem을 MoveAndPaintAsync로 합치고, 필드명과 색칠 함수를 간소화했습니다. Ghost·레이저·대시 및 회전 분기는 별도 샘플로 분리했습니다.
-- 입력 코드는 6방향 중 D 방향만 발췌했습니다. InitGame 구현, 이동 불가 연출, 카메라 처리, 이동 횟수·경로 기록 갱신은 생략했습니다. CheckGameCleared의 모드 분기는 원본을 유지하되 중복 완료 방어를 추가했습니다. `_moves`·`_answer`는 원본에서 관리하는 기록이며 이 발췌에서는 갱신 코드를 표시하지 않습니다. 테스트는 플레이어의 수동 플레이 검증이며 자동 테스트가 아닙니다.
-- Undo의 원본 struct를 tuple로 묶고 맵·플레이어·남은 길 수·Ghost·Laser·포탈 상태를 유지했습니다. 카메라·이동 기록·UI와 일시적 이펙트 해제 처리는 생략했습니다.
-- 인버터의 그룹화와 데이터 변환을 한 번의 순회로 합치고, 거리순 정렬은 SortedDictionary로 바꿨습니다. 사운드와 전체 화면 파동 이펙트는 생략했습니다.
-- 레이어 회전은 별도 샘플로 분리했습니다. 필드 초기화, `IsOnSurface`·`Render`, `TileType`·`TileHelper`, Unity·UniTask·DOTween과 타일 뷰는 원본 의존성으로 단독 실행되지 않습니다.
+- 기준 커밋은 [`6688273`](https://github.com/1Seong/Capstone2/commit/66882730c36e4c3f4e7d59f019a835ea749f39b8)입니다. 원본은 [MovePlayer](https://github.com/1Seong/Capstone2/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/PuzzlePlayer.cs#L539), [SaveUndoState](https://github.com/1Seong/Capstone2/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/PuzzlePlayer.cs#L1089), [InverterEffectAsync](https://github.com/1Seong/Capstone2/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/PuzzlePlayer.cs#L688)에서 확인할 수 있습니다.
+- 이동 예시는 D 방향과 기본 이동·포탈·인버터 경로를 중심으로 재구성했습니다. 이동 횟수와 해답 미리보기 경로는 원본의 `_moves`와 `_answer`에서 관리합니다.
+- 되돌리기 예시는 원본의 상태 구조체를 튜플로 풀어 썼습니다. 인버터 예시는 거리 그룹 구성과 타일 반전을 한 번의 순회로 표현했습니다.
+- [고스트·레이저·대시](../gimmick-state/README.md)와 [레이어 회전](../layer-rotation/README.md)은 별도 예시에서 이어집니다.

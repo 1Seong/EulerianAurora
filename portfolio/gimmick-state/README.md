@@ -1,33 +1,32 @@
 # Ghost·레이저·대시의 상태와 연속 이동
 
-**담당자:** 최성원 — 퍼즐 기믹과 이동 상태 연동
+담당자 최성원 — 퍼즐 기믹과 이동 상태 연동
 
-이동 시 Ghost 횟수를 차감하고, 레이저는 진행 방향의 다음 타일을 확인합니다. 대시는 다음 이동을 호출해 일반 이동과 기믹 처리를 이어갑니다.
+Ghost를 얻으면 일정 횟수 동안 이미 칠한 길을 다시 밟을 수 있습니다. 레이저는 제자리에서 입력한 방향으로 길을 칠하고, 대시는 타일의 화살표 방향으로 이동을 한 번 더 시도합니다.
 
-- **발췌** [Ghost·레이저·대시 분기](#ghost레이저대시-분기)
-- **원본** [이동과 기믹](https://github.com/1Seong/EulerianAurora/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/PuzzlePlayer.cs#L539)
-- [생략 및 재구성한 내용](#생략-및-재구성한-내용)
+[기믹 적용 순서](#이동-입력에-기믹을-적용하는-순서) · [원본 코드와 예시 범위](#원본-코드와-예시-범위)
 
 ## 코드
 
-**PuzzlePlayer:** 획득한 기믹 상태를 다음 이동에 적용합니다. 이동 취소는 gameplay 샘플의 상태 스냅샷을 사용하며, 회전은 layer-rotation 샘플에 분리돼 있습니다.
+### 이동 입력에 기믹을 적용하는 순서
+
+`PuzzlePlayer`는 이동할 수 있는 방향인지 확인한 뒤 Ghost 횟수와 레이저 보유 상태를 확인합니다. 예를 들어 Ghost 횟수가 1인 상태에서 이동하면 먼저 0으로 줄어들고, 도착 타일부터 다시 색칠과 기믹 처리가 적용됩니다. 도착 타일이 대시라면 추가 이동까지 최초 입력의 되돌리기 한 번에 묶입니다.
 
 ```mermaid
 %%{init: {"htmlLabels": false, "themeVariables": {"fontFamily": "Arial, sans-serif"}, "flowchart": {"padding": 20, "diagramPadding": 20}, "sequence": {"diagramMarginX": 24, "diagramMarginY": 16, "wrap": true}}}%%
-flowchart LR
-  A["유효한 이동 입력"] --> B{"보유 기믹"}
-  B -->|Ghost| C["횟수 차감 · 이동"]
-  C --> D{"차감 후 0인가"}
-  D -->|예| E["도착 타일 색칠 · 기믹 적용"]
-  B -->|Laser| F["상태 소모 · 방향별 연속 반전"]
-  B -->|없음| E
-  E --> G["대시이면 추가 이동 · 별도 Undo 저장 안 함"]
+flowchart TB
+  A["유효한 이동 입력"] --> B["Ghost 횟수가 남아 있으면 차감"]
+  B --> C{"레이저를 보유했는가?"}
+  C -->|예| D["제자리에서 진행 방향을 칠하고 레이저 소모"]
+  C -->|아니오| E["도착 타일로 이동"]
+  E --> F{"Ghost 횟수가 0인가?"}
+  F -->|예| G["도착 타일 색칠 · 기믹 적용"]
+  F -->|아니오| H["이동 종료"]
+  G --> I["대시 타일이면 화살표 방향으로 추가 이동"]
 ```
 
-### Ghost·레이저·대시 분기
-
 ```csharp
-// ApplyItem의 상태 획득과 방향 대시를 대표로 발췌
+// ApplyItem에서 Ghost·레이저 획득과 +X 대시를 발췌
 private async UniTask ApplySpecialTile(char before)
 {
     switch (before)
@@ -39,13 +38,13 @@ private async UniTask ApplySpecialTile(char before)
             HasLaser = true;
             break;
         case (char)TileType.DashXp:
-            // false: 연쇄 이동을 별도 입력·별도 Undo 단위로 저장하지 않는다.
+            // false를 전달해 연쇄 이동을 최초 입력의 Undo에 포함한다.
             await MovePlayer(Vector3.right, false);
             break;
     }
 }
 
-// MovePlayer의 Ghost 분기: 남은 횟수를 소모하고 색칠을 건너뛰는 구간
+// MovePlayer의 일반 이동에서 Ghost 횟수에 따라 도착 타일을 처리한다.
 private async UniTask ApplyGhostMove(Vector3 destination)
 {
     if (_currentGhostCount > 0) --CurrentGhostCount;
@@ -62,7 +61,7 @@ private async UniTask ApplyGhostMove(Vector3 destination)
     }
 }
 
-// MovePlayer의 레이저 분기: 한 번 사용하고 이동 방향의 타일을 연속 반전
+// MovePlayer의 레이저 분기에서 진행 방향으로 이어진 타일을 색칠한다.
 private async UniTask FireLaser(Vector3 next, Vector3 direction)
 {
     HasLaser = false;
@@ -82,10 +81,8 @@ private async UniTask FireLaser(Vector3 next, Vector3 direction)
 }
 ```
 
-## 생략 및 재구성한 내용
+## 원본 코드와 예시 범위
 
-- 원본: Assets/Scripts/PuzzlePlayer.cs의 MovePlayer·ApplyItem. 기준 커밋: `66882730c36e4c3f4e7d59f019a835ea749f39b8`.
-- 세 함수는 원본의 분기를 설명용으로 분리한 이름입니다. 이동 가능 여부·Undo 저장은 원본 MovePlayer에서 먼저 처리하며, 이 발췌의 FireLaser는 첫 도착 타일이 유효하다는 전제입니다.
-- Ghost는 차감 후 횟수가 0인지 확인하는 원본 순서를 유지했습니다. 무제한 통과나 모든 기믹 무시를 뜻하지 않습니다.
-- 대시는 +X만 대표로 남겼습니다. -X·±Y·±Z도 같은 방식으로 MovePlayer를 호출합니다. 포탈·인버터·회전과 입력 잠금은 별도 샘플에 있습니다.
-- 렌더·필드·CurrentGhostCount/HasLaser 프로퍼티의 이펙트·카메라·사운드·CannotMove 본문은 생략했습니다. 원본 의존성이 필요한 설명용 코드이며 단독 실행되지 않습니다.
+- 기준 커밋 `6688273`의 [이동과 기믹 상태 처리](https://github.com/1Seong/Capstone2/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/PuzzlePlayer.cs#L539)와 [타일별 기믹 적용](https://github.com/1Seong/Capstone2/blob/66882730c36e4c3f4e7d59f019a835ea749f39b8/Assets/Scripts/PuzzlePlayer.cs#L629)에서 이어 볼 수 있습니다.
+- 이동 함수의 분기를 설명용 함수 세 개로 나눴습니다. `FireLaser`는 호출부에서 첫 타일의 이동 가능 여부를 확인한 뒤 실행하는 부분입니다. 대시는 +X만 발췌했으며 원본은 나머지 방향도 같은 방식으로 처리합니다.
+- 입력 전 상태 복원과 인버터는 [게임플레이 예시](../gameplay/README.md), 회전 좌표 변환은 [레이어 회전 예시](../layer-rotation/README.md)에서 확인할 수 있습니다.
