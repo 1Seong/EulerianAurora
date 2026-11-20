@@ -90,3 +90,9 @@ private SolveResult BuildSolution(List<(int parent, int direction)> trace, int t
 - 에디터 예시는 보드 복사와 결과 반영을 중심으로 발췌했습니다. 취소 및 예외 처리의 전체 흐름은 원본 `AutoTest()`에 있습니다.
 - 솔버 예시는 방향별 다음 상태 검사와 부모 추적을 보여줍니다. 탐색 우선순위와 재시도는 `Search.Solve()`와 `Search.Explore()`에, 기믹별 상태 전이는 `Search.Advance()`에 있습니다.
 - Unity에서 독립 풀이와 생성 후보의 입력 재생을 확인하는 방법은 [회귀 검사 안내](../../Tests/Unity/README.md)에 있습니다.
+
+## 참고 문헌
+
+- A. Itai, C. H. Papadimitriou, J. L. Szwarcfiter, "Hamilton Paths in Grid Graphs," *SIAM Journal on Computing*, vol. 11, no. 4, pp. 676–686, 1982. [PDF](https://csaws.cs.technion.ac.il/~itai/publications/Algorithms/Hamilton-paths.pdf)
+  - 격자 그래프의 칸은 좌표 합의 홀짝으로 두 색으로 나뉘고, 해밀턴 경로가 있으려면 두 색의 칸 수가 경로의 시작 칸 색과 맞아야 합니다. 솔버는 이 조건을 3D 좌표(x+y+z)로 확장해, 회전과 기믹이 없는 맵 중 조건에 맞지 않는 맵을 탐색 전에 걸러냅니다. 원본은 [HasValidStartColor](https://github.com/1Seong/Capstone2/blob/55e95986068023ae72a0f2c57472254d38787d20/Assets/Scripts/PuzzleSolver.cs#L460)입니다.
+  - 고립된 칸과 막다른 칸으로 분기를 버리는 가지치기는 이 논문의 내용이 아니며, 솔버에서 따로 구현했습니다.
